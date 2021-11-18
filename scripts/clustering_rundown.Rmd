@@ -1,0 +1,174 @@
+---
+title: "ROSMAP snRNA-seq Clustering"
+author: "Won-Min Song"
+date: "November 18, 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Run-down for snRNA-seq clustering analysis for ROSMAP data
+
+Load necessary packages and functions into R
+
+```{r load functions and packages}
+library(Seurat)
+library(ggplot2)
+library(ggrepel)
+library(scran)
+
+source("scripts/R_functions/enrichment_functions.v2.R")
+source("scripts/R_functions/clustering_functions.v1.R")
+
+```
+
+## data loading
+
+Now, since the data files is huge, load it from cloud
+
+```{r data loading, echo=FALSE}
+urlstr <- "https://www.dropbox.com/s/w0mzab5i3dwxwlp/SeuratObject.RDS?raw=1"
+seu = readRDS(url(urlstr))
+print(seu)
+```
+
+#### Get Feature selection
+# use modelGeneVar function from scran
+```{r model dispersion, echo=FALSE}
+gene.var = modelGeneVar(x = GetAssayData(seu),block = factor(seu@meta.data$individualID))
+gene.var =gene.var[order(gene.var$bio,decreasing = TRUE),]
+
+library(ggplot2)
+library(ggrepel)
+pobj = ggplot() + geom_point(data = as.data.frame(gene.var[,1:6]),aes(x = tech,y = bio,colour = FDR < 0.05),alpha = 0.2) + 
+  scale_colour_manual(values = c("TRUE" = "red","FALSE" = "gray")) + 
+  geom_text_repel(data = subset(data.frame(gene.var[1:20,1:6],gene = rownames(gene.var)[1:20]),FDR < 0.05),aes(x = tech,y = bio,label = gene),size = 5) + # 
+  labs(x = "Technical",y = "Biological") + 
+  guides(colour = guide_legend(title = "Biological Var.\nFDR < 0.05")) + 
+  theme_bw() + 
+  theme(axis.title = element_text(size = 20),axis.text = element_text(size = 17),
+        legend.position = "bottom",legend.title = element_text(size = 20),
+        legend.text = element_text(size = 17),legend.direction = "horizontal")
+
+png(file = "variance.png",res = 300,width = 1800,height = 2100)
+print(pobj)
+dev.off()
+```
+
+## PCA data
+Now, let's perform PCA. We will use scran's getDenoisedPCs routine to find denoised data, based on the biological signals from modelGeneVar(). 
+
+```{r model dispersion, echo=FALSE}
+pcs <- getDenoisedPCs(t(Seurat::GetAssayData(seu, assay = "SCT", slot = "scale.data")), technical=gene.var)
+
+# Get the total variance:
+total_variance <- sum(matrixStats::rowVars(Seurat::GetAssayData(seu, assay = "SCT", slot = "scale.data")))
+
+pca.pdata = data.frame(PC = 1:length(pca@stdev),
+                       eigValues = (pca@stdev)^2,  ## EigenValues
+                       varExplained = eigValues / total_variance * 100,
+                       totalExplained = cumsum(eigValues / total_variance * 100))
+
+pobj = ggplot(data = pca.pdata,aes(x = PC,y = varExplained)) + geom_point() + geom_line() + 
+  geom_vline(xintercept = c(ncol(pcs$components),7,20),colour = c("red","blue","green")) + 
+  theme_bw() + 
+  labs(x = "PCs",y = "%. Variance Explained") + 
+  theme(axis.title = element_text(size = 20),axis.text = element_text(size = 17))
+
+png(file = "variance_explained.png",res = 300,width = 2400,height = 2100)
+print(pobj)
+dev.off()
+```
+
+## UMAP Embedding
+
+```{r UMAP plotting, echo=FALSE}
+# jointly visualize with other complex features
+xy = Embeddings(seu,"umap")
+pdata = cbind.data.frame(seu@meta.data,as.data.frame(xy[match(colnames(seu),rownames(xy)),]))
+pdata$pathology.group = gsub("late","Late AD",gsub("early","Early AD",gsub("no","Healthy",gsub("-pathology$","",as.character(pdata$pathology)))))
+
+# get cluster label coordinate
+xy.o = do.call('rbind',lapply(split(1:nrow(xy),factor(seu@meta.data$seurat_clusters)),function(x,y) apply(rbind(y[x,]),2,function(q) median(q)),y = xy));colnames(xy.o) = c("x","y")
+hobj = hclust(dist(xy.o),"complete")
+cls.tick = hobj$label[hobj$order]
+
+# first create comprehensive uMAP plot
+colmap = c("Healthy" = "darkolivegreen1","Early AD" = "yellow","Late AD" = "coral")
+
+pobj = ggplot() + 
+  geom_point(data = pdata,aes(x = UMAP_1,y = UMAP_2,fill = pathology.group,colour = broad.cell.type),shape = 21,alpha = 0.4,size = 3,stroke = 1.5) + 
+  geom_text(data = data.frame(cls.id = rownames(xy.o),as.data.frame(xy.o)),aes(x = x,y = y,label = cls.id),size = 7) + 
+  scale_fill_manual(values = colmap) +
+  guides(fill = guide_legend(title = "Diagnosis",ncol = 3),colour = guide_legend(title = "Cell Type",ncol = 3)) + 
+  theme_bw() + 
+  theme(axis.ticks = element_blank(),axis.title = element_blank(),axis.text = element_blank(),
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        legend.title = element_text(size = 20),legend.text = element_text(size = 18),
+        legend.position = "bottom",legend.direction = "horizontal")
+
+png(file = "umap.png",res = 300,width = 3500,height = 2800)
+print(pobj)
+dev.off()
+```
+
+## Marker plotting on UMAP
+```{r cell type markers, echo=FALSE}
+# get marker expression plots
+genes = c("Ex" = "NRGN","In" = "GAD1","Ast" = "AQP4","Ast" = "GFAP",
+          "Mic" = "TYROBP","Mic" = "CX3CR1","Oli" = "PLP1","OPC" = "VCAN","End" = "FLT1")
+dobj = DotPlot(seu, features = genes) + RotatedAxis() + scale_y_discrete(limits = cls.tick) + 
+  labs(x = "Cell type marker",y = "Cluster") + 
+  theme(axis.text.y = element_text(size = 16),axis.text.x = element_text(size = 14),
+        legend.position = "bottom",legend.direction = "vertical")
+
+png(file = "Celltype_Markers.Dotplot.png",res = 300,width = 1700,height = 2700)
+print(dobj)
+dev.off()
+```
+
+## Composition analysis
+```{r composition analysis, echo=FALSE}
+## create proportion plot
+# assign features 
+mods = split(colnames(seu),Idents(seu));
+vec = seu@meta.data$pathology.group;names(vec) = colnames(seu)
+colmap = c("Healthy" = "darkolivegreen1","Early AD" = "yellow","Late AD" = "coral")
+
+# check enrichments 
+fet.res = perform.AllPairs.FET(geneSets1 = mods,geneSets2 = split(names(vec),factor(vec)),background = colnames(seu),adjust.FET.pvalue = T,or = 1,alternative = "greater",
+                               do.multicore = F,n.cores = NULL)
+fet.res = fet.res[order(fet.res$FET_pvalue),]
+fet.res$corrected.FET.pvalue = p.adjust(fet.res$FET_pvalue,"BH")
+
+require(reshape2)
+pmat = acast(data = fet.res,formula = set1_Name ~ set2_Name,value.var = "corrected.FET.pvalue")
+
+# get coordinates for marks
+m = overlap_modules_wt_categ(mods,vec);
+m = m[,match(rev(names(colmap)),colnames(m))]
+dot.coord = t(apply(m,1,function(x) cumsum(x) - 0.5*x))
+
+# make data for dot marks
+dot.data = subset(fet.res,corrected.FET.pvalue < 0.05 & enrichment.foldchange > 1.2)
+ij = cbind(match(as.character(dot.data$set1_Name),rownames(dot.coord)),match(as.character(dot.data$set2_Name),colnames(dot.coord)))
+dot.data$y = apply(ij,1,function(x,m) m[x[1],x[2]],m = dot.coord)
+
+# generate plot
+probj = get_proportion_plot(modules = mods,vec = vec,cols = colmap)	
+probj = probj + scale_fill_manual(values = colmap,limits = names(colmap)) + 
+  geom_point(data = dot.data,aes(x = set1_Name,y = y,size = enrichment.foldchange),colour = "red",alpha = 0.5) + 
+  guides(size = guide_legend(ncol = 1,title = "EFC"),fill = guide_legend(title = "Pathology",ncol = 1)) + 
+  scale_x_discrete(limits = cls.tick) + scale_y_continuous(limits = c(0,1)) + 
+  coord_flip() + 
+  theme(axis.text = element_text(size = 19),
+        legend.text = element_text(size = 18),legend.title = element_text(size = 20))
+
+
+png(file = "Pathology_Proportion.png",res = 300,width = 1340,height = 2800)
+print(probj)
+dev.off()
+```
