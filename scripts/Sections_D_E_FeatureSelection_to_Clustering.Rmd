@@ -33,7 +33,7 @@ source("./scripts/R_functions/clustering_functions.v1.R")
 
 Now, since the data files is huge, load it from cloud
 
-```{r data loading, echo=FALSE}
+```{r data loading}
 urlstr <- "https://www.dropbox.com/s/w0mzab5i3dwxwlp/SeuratObject.RDS?raw=1"
 seu = readRDS(url(urlstr))
 print(seu)
@@ -43,7 +43,7 @@ print(seu)
 # use modelGeneVar function from scran
 Here, we will demonstrate how to select genes with significant dispersions by using modelGeneVar() from scran workflow, or FindVariableFeatures() from Seurat
 
-```{r model dispersion, echo=FALSE}
+```{r model dispersion}
 use.scran = FALSE # use scran workflow
 use.seurat = TRUE # use seurat workflow
 
@@ -100,7 +100,7 @@ print(length(seu[["SCT"]]@var.features))
 ## PCA data
 Now, let's perform PCA. This portion includes two pipelines for PC selection: getDenoisedPCs from scran, and observing explained variance curve for Seurat. 
 
-```{r PCA, echo=FALSE}
+```{r PCA}
 use.scran = FALSE # use scran workflow
 use.seurat = TRUE # use seurat workflow
 
@@ -156,7 +156,7 @@ if (use.seurat)
 
 ## UMAP Embedding
 
-```{r UMAP plotting, echo=FALSE}
+```{r UMAP plotting}
 # jointly visualize with other complex features
 xy = Embeddings(seu,"umap")
 pdata = cbind.data.frame(seu@meta.data,as.data.frame(xy[match(colnames(seu),rownames(xy)),]))
@@ -188,7 +188,7 @@ dev.off()
 ```
 
 ## Marker plotting on UMAP
-```{r cell type markers, echo=FALSE}
+```{r cell type markers}
 # get marker expression plots
 genes = c("Ex" = "NRGN","In" = "GAD1","Ast" = "AQP4","Ast" = "GFAP",
           "Mic" = "TYROBP","Mic" = "CX3CR1","Oli" = "PLP1","OPC" = "VCAN","End" = "FLT1")
@@ -203,7 +203,7 @@ dev.off()
 ```
 
 ## Composition analysis
-```{r composition analysis, echo=FALSE}
+```{r composition analysis}
 ## create proportion plot
 # assign features 
 mods = split(colnames(seu),Idents(seu));
@@ -247,6 +247,6 @@ dev.off()
 
 
 ## Session info
-```{r session info, echo=FALSE}
+```{r session info}
 sessionInfo()
 ```
