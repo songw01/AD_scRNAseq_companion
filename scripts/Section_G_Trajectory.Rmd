@@ -1,0 +1,95 @@
+---
+title: 'ROSMAP snRNA-seq: trajectory inference'
+author: "Qian Wang, Minghui Wang"
+date: "November 29, 2021"
+output: html_document
+---
+
+## Example pipeline to perform trajectory inference
+```{r setup environment, eval = TRUE, echo = TRUE, results = "hide"}
+rm(list = ls())
+
+print(getwd())
+
+source("./scripts/R_functions/MiscPreprocessing.R")
+source("./scripts/R_functions/LineageFunctions.R")
+require(Matrix)
+require(Seurat)
+```
+
+Read in Seurat Object file.
+```{r read Seurat object, eval = TRUE, echo = TRUE}
+obj = readRDS("Output/SeuratObject.RDS")
+#urlstr <- "https://www.dropbox.com/s/w0mzab5i3dwxwlp/SeuratObject.RDS?raw=1"
+#obj = readRDS(url(urlstr))
+```
+
+Prepare output directory.
+```{r prepare output, eval = TRUE, echo = TRUE}
+outdir = 'Trajectory'
+if(!file.exists(outdir)) dir.create(outdir, recursive = TRUE)
+setwd(outdir)
+```
+
+As an example, we will perform trajectory inference for AD cells in cluster 5.
+```{r get data, eval = TRUE, echo = TRUE}
+clusterid = 5
+obj2 = obj[, Idents(obj) == clusterid & obj@meta.data$pathologic.diagnosis.of.AD == 'YES']
+Dat = GetAssayData(obj2)
+meta = obj2@meta.data
+GeneNames = rownames(Dat)
+Names = colnames(Dat)
+cNames = meta$Barcode
+l = length(Names)
+
+#deleting columns not in the covariate list
+temp = rep(T, l)
+for (i in 1:l){
+  if (!(Names[i] %in% cNames)){
+    temp[i] = F
+  }
+}
+
+In = which(temp)
+#print(temp)
+Dat = Dat[,In]
+
+#deleting extra rows in covariate list
+Names = Names[In]
+l = length(cNames)
+temp = rep(T,l)
+for (i in 1:l){
+  if (!(cNames[i] %in% Names)){
+    temp[i] = F
+  }
+}
+In = which(temp)
+meta = meta[In, ]
+
+In_genes = rownames(obj2)[rowSums(obj2@assays$SCT@counts>0) > 0.2*ncol(obj2)]
+DatNorm = Dat
+DatNorm2 = DatNorm[match(In_genes, rownames(DatNorm)), ]
+GeneNamesAD = GeneNames[match(In_genes, GeneNames)]
+
+DatNorm4 = DatNorm2
+Dat4 = meta
+
+temp = DatNorm4
+temp2 = Dat4
+
+#converting ENSG to gene symbols
+gene_short_name = In_genes
+```
+
+Run monocle pipeline.
+```{r Run monocle, eval = TRUE, echo = TRUE}
+rownames(temp) = NULL
+colnames(temp) = NULL
+MonRun = RunMonocleTobit(temp, temp2, C_by = 'Pseudotime', gene_short_name = gene_short_name)
+```
+
+Save outputs.
+```{r save output, eval = TRUE, echo = TRUE}
+saveRDS(MonRun, file = paste0("cluster", clusterid, "-monocle.RDS"))
+saveRDS(DatNorm4, file = paste0("cluster", clusterid, "-input_mat.RDS"))
+```
