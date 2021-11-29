@@ -1,0 +1,165 @@
+---
+title: 'ROSMAP snRNA-seq: QC to Clustering'
+author: "Minghui Wang"
+date: "November 23, 2021"
+output: html_document
+---
+
+## Example pipeline to perform snRNA-seq data analysis using the ROSMAP data
+
+First, dowload the snRNA-seq count matrix and associated meta tables into a folder, say, "Data". In this tutorial, we will download the filtered data provided by Mathys et al from the Synapse at https://www.synapse.org/#!Synapse:syn18681734. After downloading, the Data folder should have the following files:
+filtered_column_metadata.txt, filtered_count_matrix.mtx, and filtered_gene_row_names.txt. Additionally, we can also download files 41586_2019_1195_MOESM3_ESM.xlsx and 41586_2019_1195_MOESM5_ESM.xlsx from the Supplementary Tables 1 &3 of the Mathys et al paper at https://www.nature.com/articles/s41586-019-1195-2#additional-information, as well as a mapping key file "snRNAseqPFC_BA10_id_mapping.csv" (https://www.synapse.org/#!Synapse:syn18694015) and a biospecimen meta file "snRNAseqPFC_BA10_biospecimen_metadata.csv" (https://www.synapse.org/#!Synapse:syn18642936) to add in more sample demographic information.
+
+Load necessary libraries and set up input and output locations.
+```{r setup environment, eval = TRUE, echo = TRUE, results = "hide"}
+library(ggplot2)
+library(Seurat)
+library(dplyr)
+library(patchwork)
+library(Matrix)
+library(openxlsx)
+indir = 'Data/'
+outdir = "Output/"
+if(!file.exists(outdir)) dir.create(outdir, recursive = TRUE)
+```
+
+Let us read in sample meta data.
+```{r read sample meta, eval = TRUE, echo = TRUE}
+key = read.csv(paste0(indir, 'snRNAseqPFC_BA10_id_mapping.csv'), as.is = TRUE, header = TRUE)
+key = unique(key[, c('projid', 'Subject')])
+natsup1 = read.xlsx(paste0(indir, '41586_2019_1195_MOESM3_ESM.xlsx'), sheet = "S1")
+natsup1$Diagnosis = c(YES = 'AD', NO = 'Control')[natsup1[, 'pathologic.diagnosis.of.AD']]
+natsup3 = read.xlsx(paste0(indir, '41586_2019_1195_MOESM5_ESM.xlsx'), sheet = 1)
+natsup = data.frame(natsup1, natsup3[match(natsup1$Subject, natsup3$Subject), !colnames(natsup3) %in% colnames(natsup1)], stringsAsFactors = FALSE)
+biospecimen = read.csv(paste0(indir, 'snRNAseqPFC_BA10_biospecimen_metadata.csv'), as.is=TRUE, header = TRUE)
+natsup$projid = key[match(natsup$Subject, key$Subject), 'projid']
+natsup$individualID = biospecimen[match(natsup$projid, biospecimen$projid), 'individualID']
+head(natsup, 5)
+```
+
+Write compiled sample meta table into a file.
+```{r write sample meta, eval = TRUE, echo = TRUE}
+write.table(natsup, paste0(outdir, "meta.samples.tsv"), quote = FALSE, sep = '\t', row.names = FALSE, col.names = TRUE)
+```
+
+Now read in single cell data.
+```{r read single cell data, eval = TRUE, echo = TRUE}
+meta = read.table(paste0(indir, 'filtered_column_metadata.txt'), as.is = TRUE, header = TRUE)
+colnames(meta)[colnames(meta) == 'TAG'] = 'Barcode'
+meta = data.frame(meta, natsup[match(meta$projid, natsup$projid), colnames(natsup) != 'projid'], stringsAsFactors = FALSE)
+rownames(meta) = meta$Barcode
+#read in count matrix
+dat = readMM(paste0(indir, 'filtered_count_matrix.mtx'))
+features = scan(paste0(indir, 'filtered_gene_row_names.txt'), what = character())
+rownames(dat) = features
+colnames(dat) = meta$Barcode
+```
+
+Create Seurat object from the count matrix.
+```{r create seurat object, eval = TRUE, echo = TRUE}
+SeuratObject = CreateSeuratObject(counts = dat, project = "SeuratObjectProject", min.cells = 3, min.features = 200, names.field=1, names.delim='.', meta.data=meta)
+SeuratObject@meta.data$orig.ident = NULL
+SeuratObject@assays$RNA@meta.features = data.frame(Geneid = rownames(SeuratObject), Symbol = rownames(SeuratObject), row.names = rownames(SeuratObject), stringsAsFactors = FALSE)
+rm(dat)
+```
+
+Note that the mitochondrial reads has been removed by the original study from the count matrix we are using here. However to check the fraction of mitochondrial reads in a new dataset, execute a command like the following
+```{r check mitochondrial reads, eval = TRUE, echo = TRUE}
+SeuratObject = PercentageFeatureSet(SeuratObject, pattern = "^MT-", col.name = "percent.mt")
+summary(SeuratObject[[]]$percent.mt)
+```
+
+Now we can check the data qulity by first plotting the distribution of number of features and total read counts.
+```{r data check, eval = TRUE, echo = TRUE, fig.width = 6.7, fig.height = 4, dpi = 300}
+meta1 = SeuratObject@meta.data
+write.table(meta1, file=paste0(outdir, 'meta.seurat.raw.tsv'), quote = FALSE, sep = '\t', row.names = FALSE)
+meta1 = meta1[rev(order(meta1$Diagnosis)), ]
+meta1$sid = unsplit(lapply(split(meta1, meta1$Diagnosis), function(x) paste0(c(AD = 'AD', Control = 'Ct')[x$Diagnosis[1]], as.integer(factor(x$projid, level = unique(x$projid))))), meta1$Diagnosis)
+meta1$sid = factor(meta1$sid, levels = unique(meta1$sid))
+theme_bw2 = function() theme_bw() + theme(panel.grid = element_blank())
+p1 = ggplot(meta1, aes(x = sid, y = nFeature_RNA, fill = Diagnosis)) + geom_violin(width = 0.8, scale = 'width') + theme_bw2() + theme(legend.position = 'none', axis.text.x = element_text(angle = 45, size = 6, hjust = 1), axis.text.y = element_text(size = 7)) + xlab(NULL)
+p2 = ggplot(meta1, aes(x = sid, y = nCount_RNA, fill = Diagnosis)) + geom_violin(width = 0.8, scale = 'width') + theme_bw2() + theme(legend.position = 'none', axis.text.x = element_text(angle = 45, size = 6, hjust = 1), axis.text.y = element_text(size = 7)) + xlab(NULL)
+print(p1 / p2)
+```
+```{r plot feature dist, include = FALSE}
+png(paste0(outdir, 'feature.dist.Dx.png'), width=2000, height=1200, pointsize = 12, res = 300)
+print(p1 / p2)
+dev.off()
+```
+
+We can also use FeatureScatter to visualize feature-feature relationships per donor.
+```{r plot FeatureScatter, eval = TRUE, echo = TRUE, fig.width = 6.7, fig.height = 3.3, dpi = 300}
+SeuratObject@meta.data$projid = factor(SeuratObject@meta.data$projid)
+p3 = FeatureScatter(SeuratObject, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", pt.size=0.1, group.by='projid') + theme(title=element_text(size=8), legend.text=element_text(size=6), legend.title=element_text(size=7))
+print(p3)
+```
+```{r plot feature scatter, include = FALSE}
+png(paste0(outdir,'feature.scatter.png'), width=2000, height=1000, pointsize = 12, res = 300)
+print(p3)
+dev.off()
+```
+
+Perform some simple quality control (QC) by first filtering out cells that have unique gene counts over 6,000 or less than 200. The filter on percent.mt has no actual effect here and is just used for illustration purpose. 
+```{r data filtering, eval = TRUE, echo = TRUE}
+SeuratObject
+SeuratObject = subset(SeuratObject, subset = nFeature_RNA > 200 & nFeature_RNA < 6000 & percent.mt < 5)
+SeuratObject
+```
+
+After QC, normalize the count data using Seurat's SCTransform function. This may take a while to finish.
+```{r normalization, eval = TRUE, echo = TRUE, message = FALSE, warning = FALSE}
+SeuratObject = SCTransform(SeuratObject, verbose = TRUE)
+```
+
+Extract gene-level statistics and make plots such as the detection rate.
+```{r extract gene-level stats, eval = TRUE, echo = TRUE, fig.width = 6.7, fig.height = 3.3, dpi = 300}
+genes = SeuratObject@assays$RNA@meta.features[rownames(SeuratObject), ]
+genes = data.frame(genes, SeuratObject@assays[['SCT']]@meta.features, row.names = rownames(genes), stringsAsFactors = FALSE)
+hist(genes[, 'sct.detection_rate'])
+```
+```{r plot detection_rate,  include = FALSE}
+png(paste0(outdir, 'feature.detection_rate.png'), width=2000, height=1000, pointsize = 12, res = 300)
+hist(genes[, 'sct.detection_rate'])
+dev.off()
+```
+Perform dimensionality reduction by PCA.
+```{r PCA, eval = TRUE, echo = TRUE, fig.width = 5, fig.height = 3.3, dpi = 300}
+SeuratObject = RunPCA(SeuratObject, verbose = FALSE)
+#Plot PCA elbow
+ElbowPlot(SeuratObject, ndims = 50)
+```
+```{r plot PCA Elbow,  include = FALSE}
+png(paste0(outdir, 'PCA.Elbow.png'), width=1500, height=1000, pointsize = 12, res = 300)
+ElbowPlot(SeuratObject, ndims = 50)
+dev.off()
+```
+
+After inspecting the elbow plot, we choose principal components 1:30 for UMAP/tSEN visualization and clustering.
+```{r UMAP/tSNE/clustering, eval = TRUE, echo = TRUE}
+SeuratObject = RunUMAP(SeuratObject, dims = 1:30, verbose = FALSE)
+SeuratObject = RunTSNE(SeuratObject, dims = 1:30, verbose = FALSE)
+SeuratObject = FindNeighbors(SeuratObject, verbose = FALSE)
+SeuratObject = FindClusters(SeuratObject, resolution = 0.8, verbose = FALSE)
+```
+Plot UMAP.
+```{r UMAP, eval = TRUE, echo = TRUE, fig.width = 4, fig.height = 3.3, dpi = 300}
+p1 <- DimPlot(SeuratObject, reduction = "umap", label = TRUE)
+print(p1)
+```
+```{r plot UMAP,  include = FALSE}
+png(paste0(outdir, 'UMAP.png'), width=1200, height=1000, pointsize = 12, res = 300)
+print(p1)
+dev.off()
+```
+
+Save the SeuratObject into a file.
+```{r save object file, eval = TRUE, echo = TRUE}
+saveRDS(SeuratObject, file = paste0(outdir, 'SeuratObject.RDS'))
+```
+
+A precomputed version of the SeuratObject file is available at https://www.synapse.org/#!Synapse:syn26477245
+
+## Session info
+```{r session info}
+sessionInfo()
+```
