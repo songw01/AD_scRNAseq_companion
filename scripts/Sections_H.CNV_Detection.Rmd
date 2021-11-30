@@ -1,0 +1,86 @@
+---
+title: 'ROSMAP snRNA-seq: Copy Number Variation Detection Session'
+author: "Chen Ming"
+date: "Nov 30th, 2021"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 
+This tutorial show how to run InferCNV to detect CNVs in Cluster6 of snRNA-seq of the ROSMAP cohort.  
+The original InferCNV Tutorial: https://github.com/broadinstitute/inferCNV/wiki/Running-InferCNV  
+Before running codes below:  
+module load jags  
+R version: R/4.0.2  
+
+Load necessary packages and functions into R  
+
+```{r load functions and packages}
+rm(list = ls())
+library(infercnv)
+library(Seurat)
+library(dplyr)
+
+outdir <- "CNV_results"
+if(!file.exists(outdir)) dir.create(outdir, recursive = TRUE)
+
+```
+
+## data loading
+
+Now, since the data files is huge, load it from cloud.
+A precomputed version of the SeuratObject file is available at https://www.synapse.org/#!Synapse:syn26477245
+Please download the precomputed SeuratObject first.
+
+```{r data loading}
+seurat_obj=readRDS("SeuratObject.RDS")
+print(seurat_obj)
+```
+
+# Subset Cluster 6:
+Here, we extract cells of Cluster 6
+
+```
+mycluster=subset(x = seurat_obj, idents = 6)
+```
+# Preparation before creating the infercnv object
+# Raw count matrix:
+Next, we need to prepare several variables before constructing the InferCNV object
+Extract raw count matrix:
+
+```
+raw_counts_matrix=mycluster@assays$RNA@counts
+```
+
+# Cell annotation file:
+Prepare cell annotation file:
+
+```
+cellnames=row.names(mycluster@meta.data)
+cellclusters=paste(mycluster@meta.data$SeuratCelltype,mycluster@meta.data$pathology.group,sep="_")
+mycellAnnotation=t(t(cellclusters))
+rownames(mycellAnnotation)=cellnames
+
+```
+
+# Construct InferCNV object
+Now we construct the inferCNV object  
+The "my_gen_pos.GRCh38.txt" is prepared gene location file of GRCh38.  
+
+```
+infercnv_obj = CreateInfercnvObject(raw_counts_matrix=raw_counts_matrix,annotations_file=mycellAnnotation,delim="\t",gene_order_file="my_gen_pos.GRCh38.txt",ref_group_names=unique(cellclusters)[grep("no-pathology",unique(cellclusters))])					
+```
+	
+# CNV detection
+Now we run InferCNV to detect CNV:
+
+```
+infercnv_obj = infercnv::run(infercnv_obj,cutoff=0.1, out_dir=outdir cluster_by_groups=TRUE, denoise=TRUE, HMM=TRUE)
+```
+
+#
+The CNV regions are stored in:HMM_CNV_predictions.HMMi6.hmm_mode-samples.Pnorm_0.5.pred_cnv_regions.dat and HMM_CNV_predictions.HMMi6.hmm_mode-samples.Pnorm_0.5.pred_cnv_genes.dat

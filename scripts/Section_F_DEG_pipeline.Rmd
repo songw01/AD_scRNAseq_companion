@@ -1,0 +1,61 @@
+# Differential gene expression analysis of ROSMAP snRNA-seq dataset
+## Author: Peng Xu and Minghui Wang
+## Date: 11/20/2021
+
+```{r}
+library(Seurat)
+```
+
+## Input dataset from normalized Seurat object
+```{r}
+SeuratObject = readRDS('SeuratObject.RDS')
+```
+
+## Differential expression analysis of cluster-specific disease signatures by MAST
+Use clusters 13 and 19 for astrocytes
+```{r}
+result1 = NULL
+for(c1 in c(13,19)){
+	cat('Do cluster', c1, '...\n')
+	r1 <- try(FindMarkers(SeuratObject, slot='data', ident.1 = "early-pathology", ident.2 = 'no-pathology', group.by = 'pathology.group', test.use = "MAST", subset.ident = c1, logfc.threshold = 0), silent = TRUE)
+	if(!inherits(r1, 'try-error'))  result1 = rbind(result1, data.frame(Symbol = rownames(r1), Cluster = c1, Contrast = 'early-vs-nopathology', r1, stringsAsFactors =  FALSE))
+	r1 <- try(FindMarkers(SeuratObject, slot='data', ident.1 = "late-pathology", ident.2 = 'no-pathology', group.by = 'pathology.group', test.use = "MAST", subset.ident = c1, logfc.threshold = 0), silent = TRUE)
+	if(!inherits(r1, 'try-error')) result1 = rbind(result1, data.frame(Symbol = rownames(r1), Cluster = c1, Contrast = 'late-vs-nopathology', r1, stringsAsFactors =  FALSE))
+}
+write.table(result1, file = 'cluster_astrocytes.disease_DEGs.MAST.tsv', row.names = FALSE, quote = FALSE, col.names = TRUE, sep = '\t')
+```
+
+## Differential expression analysis of cluster-specific disease signatures by Wilcoxon test
+```{r}
+result2 = NULL
+for(c1 in c(13,19)){
+        cat('Do cluster', c1, '...\n')
+        r1 <- try(FindMarkers(SeuratObject, slot='data', ident.1 = "early-pathology", ident.2 = 'no-pathology', group.by = 'pathology.group', test.use = "wilcox", subset.ident = c1, logfc.threshold = 0), silent = TRUE)
+        if(!inherits(r1, 'try-error'))  result2 = rbind(result2, data.frame(Symbol = rownames(r1), Cluster = c1, Contrast = 'early-vs-nopathology', r1, stringsAsFactors =  FALSE))
+        r1 <- try(FindMarkers(SeuratObject, slot='data', ident.1 = "late-pathology", ident.2 = 'no-pathology', group.by = 'pathology.group', test.use = "wilcox", subset.ident = c1, logfc.threshold = 0), silent = TRUE)
+        if(!inherits(r1, 'try-error')) result2 = rbind(result2, data.frame(Symbol = rownames(r1), Cluster = c1, Contrast = 'late-vs-nopathology', r1, stringsAsFactors =  FALSE))
+}
+write.table(result2, file = 'cluster_astrocytes.disease_DEGs.wilcox.tsv', row.names = FALSE, quote = FALSE, col.names = TRUE, sep = '\t')
+```
+
+## Compare the analysis from MAST and Wilcoxon test
+```{r}
+library(dplyr)
+```
+
+```{r}
+result1 = result1 %>% mutate(Direction = ifelse(avg_logFC>0,"up","down"))
+result2 = result2 %>% mutate(Direction = ifelse(avg_logFC>0,"up","down"))
+result1_sum = result1 %>% group_by(Cluster, Direction) %>% summarize(MAST = n())
+result2_sum = result2 %>% group_by(Cluster, Direction) %>% summarize(wilcox = n())
+result_common = intersect(result1[,c("Symbol","Cluster","Direction")], result2[,c("Symbol","Cluster","Direction")]) %>% group_by(Cluster, Direction) %>% summarize(common = n())
+result_combined = full_join(full_join(result1_sum, result2_sum), result_common)
+head(result_combined) 
+write.table(result_combined, file = 'cluster_astrocytes.disease_DEGs.MAST_wilcox_compare.tsv', row.names = FALSE, quote = FALSE, col.names = TRUE, sep = '\t')
+
+```
+## Session info
+```{r}
+sessionInfo()
+```
+

@@ -12,9 +12,12 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Run-down for snRNA-seq clustering analysis for ROSMAP data
 
-Load necessary packages and functions into R
+This code includes 
+The .RDS file for the pre-processed seurat object can be found at: https://www.synapse.org/#!Synapse:syn26477245. 
+
 
 ```{r load functions and packages}
+##  Load necessary packages and functions into R
 rm(list = ls())
 library(Seurat)
 library(ggplot2)

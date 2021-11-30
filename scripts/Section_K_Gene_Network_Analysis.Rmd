@@ -1,0 +1,105 @@
+---
+title: 'ROSMAP snRNA-seq: MEGENA network analysis'
+author: "Qian Wang, Minghui Wang, Won-Min Song"
+date: "November 29, 2021"
+output: html_document
+---
+
+## Example pipeline to perform MEGENA network inference
+```{r setup environment, eval = TRUE, echo = TRUE, results = "hide"}
+rm(list = ls())
+library(MEGENA)
+library(Seurat)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+```
+
+Read in Seurat Object file.
+```{r read Seurat object, eval = TRUE, echo = TRUE}
+obj = readRDS("Output/SeuratObject.RDS")
+```
+
+# Setup some parameters.
+
+```{r setup parameters, eval = TRUE, echo = TRUE}
+n.cores <- 4;
+doPar <- TRUE;
+method = "spearman"
+FDR.cutoff = 0.05
+module.pval = 0.05
+hub.pval = 0.05
+```
+
+As an example, we will construct MEGENA network for AD cells in cluster 5.
+```{r get data, eval = TRUE, echo = TRUE}
+clusterid = 5
+obj.cls = obj[,(Idents(obj) == clusterid & obj@meta.data$pathologic.diagnosis.of.AD == 'YES')]
+
+# remove unexpressed genes 
+min.cells = ncol(obj.cls) * 0.05 # require at least 5% of cells expressed (~ 100 cells)
+cnt = GetAssayData(obj.cls,slot = "counts")
+nc = rowSums(cnt >= 1E-320,na.rm = TRUE)
+ii = which(nc >= min.cells) # index of expressed genes
+
+print(length(ii))
+
+# remove noisy cells
+min.genes = 100;
+ng = colSums(cnt[ii,] > 1E-320,na.rm = TRUE)
+jj = which(ng >= min.genes)
+
+print(length(jj))
+
+datExpr = GetAssayData(obj.cls,slot = "data")[ii,jj]
+
+```
+
+Prepare output directory.
+```{r prepare output, eval = TRUE, echo = TRUE}
+outdir = paste0('MEGENA/Cluster_', clusterid)
+if(!file.exists(outdir)) dir.create(outdir, recursive = TRUE)
+setwd(outdir)
+```
+
+Calculate pairwise correlation.
+```{r calc corr, eval = TRUE, echo = TRUE}
+ijw <- calculate.correlation(datExpr = as.matrix(datExpr), doPerm = 10, method = method, FDR.cutoff = FDR.cutoff)
+```
+
+Prep for parallelization prior to the PFN.
+```{r recruite multi-cores, eval = TRUE, echo = TRUE}
+if (doPar)
+{
+    cl = parallel::makeCluster(n.cores)
+    doParallel::registerDoParallel(cl)
+    # check how many workers are there
+    cat(paste("number of cores to use:", foreach::getDoParWorkers(), "\n"))
+}
+```  
+  
+Calculate PFN.
+```{r calc PFN, eval = TRUE, echo = TRUE}
+el <- calculate.PFN(ijw[, 1:3], doPar = doPar, num.cores = n.cores)
+write.table(el, file = "MEGENA_Network.txt", sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+rm(ijw)
+```
+
+Do multiscale clustering.
+```{r do clustering, eval = TRUE, echo = TRUE}
+g <- graph.data.frame(el,directed = F)
+MEGENA.output <- do.MEGENA(g,mod.pval = module.pval, hub.pval = hub.pval, remove.unsig = TRUE,
+                          min.size = 20,#max.size = vcount(g)/2,
+                          doPar = TRUE, num.cores = n.cores, n.perm = 100,
+                          save.output = TRUE)
+```
+
+Save MEGENA analysis object in a file.
+```{r save output, eval = TRUE, echo = TRUE}
+save(MEGENA.output, file = "MEGENA_output.RData")
+```
+
+## Session info
+```{r session info}
+sessionInfo()
+```

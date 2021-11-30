@@ -1,0 +1,251 @@
+---
+title: "Section_O_Spatial_Transcriptome"
+author: "Azra Krek, Won-Min Song"
+date: "11/29/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Giotto Setup
+
+Giotto results are placed in the directory "/data/Giotto_AD_codes/analysis/", data is read from the directory "/data/Giotto_AD_codes/analysis/"
+Input raw expression data was downloaded from GEO data set GSE152506. Four spatial transcriptomics samples were extracted and bundled together (Two ALzheimer's model samples: N04_D1 and N05_C2, and two WT samples: B04_D1 and B05_D2). Their spatial coordinates were shifted so that they can be analyzed side by side. Only protein coding genes were included. Gene names were put in upper case because of the format of cell type enrichment reference data. The compiled data for this tutorial can be also found at: https://www.synapse.org/#!Synapse:syn26484805. 
+Cells / spots / spatial spots are sometimes used interchangeably
+
+```{r Part A: Input, filtering, normalization}
+rm(list = ls())
+library(data.table)
+library(Giotto)
+packageVersion("Giotto") 
+
+## Giotto output is saved in the results_folder
+results_folder = "/data/Giotto_AD_codes/analysis/"
+dir.create(results_folder)
+
+## Directory where data is stored
+data_path="/data/Giotto_AD_codes/ST_data/"
+
+## Specified Python path is optional, otehrwise the default Python version will be used. 
+python_path = NULL
+if (F) python_path = "/usr/local/bin/python3"
+
+## Giotto instructions
+instrs = createGiottoInstructions(save_dir = results_folder,
+                                  save_plot = TRUE,
+                                  show_plot = TRUE,
+                                  python_path = python_path)
+
+## Read in the expression and spatial position data and create a Giotto object
+gg1 <- createGiottoObject(raw_exprs = paste0(data_path,"raw_expression_countsUC.txt"),
+                          spatial_locs =  paste0(data_path,"spot_locations.txt"),
+                          instructions = instrs)
+
+## Positions of spatial transctiptomic spots
+spatPlot(gobject = gg1,  point_alpha = 0.7, save_param = list(save_name = '2_a_spatplot_image'), point_size=2.5)
+
+
+## Show cell (spatial spot) metadata
+pDataDT(gg1)
+
+## Plot the distributions of gene and cell counts in order to determine the optimal filtering parameters
+filterDistributions(gg1, detection = 'genes', save_param = list(save_name="1_a_filterDistributions_genes"))
+filterDistributions(gg1, detection = 'cells', save_param = list(save_name="1_b_filterDistributions_spots"))
+filterCombinations(gg1,
+                   expression_thresholds = c(1),
+                   gene_det_in_min_cells = c(15, 20, 25, 30),
+                   min_det_genes_per_cell = c(300, 300, 300, 300),
+                   save_param = list(save_name="1_c_filterCombinations"))
+
+
+## Apply filtering
+gg1 <- filterGiotto(gobject = gg1,
+                    expression_threshold = 1,
+                    gene_det_in_min_cells = 20,
+                    min_det_genes_per_cell = 300,
+                    expression_values = c('raw'),
+                    verbose = T)
+
+## Normalization of expression data
+gg1 <- normalizeGiotto(gobject = gg1, scalefactor = 6000, verbose = T)
+
+
+## Add statistical info to metadata
+gg1 <- addStatistics(gobject = gg1)
+
+
+## Plot the distribution of gene counts per spot
+spatPlot2D(gobject = gg1, point_alpha = 0.7, point_size=2.5, show_image=F,
+           cell_color = 'nr_genes', color_as_factor = F,
+           save_param = list(save_name = '2_e_nr_genes'))
+
+```
+
+## Dimension reduction and clustering
+Highly variable genes are identified and used for dimension reduction using PCA and UMAP/tSNE routine. Spatial networks are then created with nearest neighboring spots, followed by Leiden clustering on the resulting spatial network.
+
+```{r Part B: Dimension reduction and clustering}
+## Identify highly variable genes
+gg1 <- calculateHVG(gobject = gg1,
+                    save_param = list(save_name = '3_a_HVGplot'))
+
+gene_metadata = fDataDT(gg1)
+featgenes = gene_metadata[hvg == 'yes' & perc_cells > 3 & mean_expr_det > 0.4]$gene_ID
+
+## Run PCA analysis
+gg1 <- runPCA(gobject = gg1, 
+              genes_to_use = featgenes, 
+              scale_unit = F, center = T, 
+              method="factominer")
+
+screePlot(gg1, ncp = 30, save_param = list(save_name = '3_b_screeplot'))
+
+plotPCA(gobject = gg1,
+        save_param = list(save_name = '3_c_PCA_reduction'))
+
+
+## Run UMAP and tSNE on PCA space, and plot the output
+gg1 <- runUMAP(gg1, dimensions_to_use = 1:10)
+plotUMAP(gobject = gg1,
+         save_param = list(save_name = '3_d_UMAP_reduction'))
+
+gg1 <- runtSNE(gg1, dimensions_to_use = 1:10)
+plotTSNE(gobject = gg1,
+         save_param = list(save_name = '3_e_tSNE_reduction'))
+
+## Create nearest neighbor network
+gg1 <- createNearestNetwork(gobject = gg1, dimensions_to_use = 1:10, k = 15)
+
+
+## Perform Leiden clustering of spots
+gg1 <- doLeidenCluster(gobject = gg1, resolution = 0.15, n_iterations = 1000)
+plotUMAP(gobject = gg1,
+         cell_color = 'leiden_clus', show_NN_network = T, point_size = 2,
+         save_param = list(save_name = '4_a_UMAP_leiden.r0.15'))
+
+spatPlot(gg1, cell_color = 'leiden_clus', point_size=2.5, show_image=F,
+         save_param = list(save_name = '4_b_leiden.r0.15'))
+
+## Co-representation of UMAP and spatial positions of spots, plotting Leiden clusters and gene number
+spatDimPlot(gobject = gg1, cell_color = 'leiden_clus',
+            dim_point_size = 2, spat_point_size = 2,
+            save_param = list(save_name = '5_a_covis_leiden_r0.15', base_width=7,base_height=12))
+
+spatDimPlot(gobject = gg1, cell_color = 'nr_genes', color_as_factor = F,
+            dim_point_size = 2, spat_point_size = 2,
+            save_param = list(save_name = '5_b_nr_genes', base_width=7,base_height=12))
+```
+
+
+```{r Part C: Cell type enrichment, rank method}
+## First produce the signature matrix from an existing single cell sequencing data set.
+
+# Read in the single cell matrix
+single_cell_DT = fread(paste0(data_path,"/zeisel_sc_data/zeisel_gnxp_norm_matched_gene_PC.txt"))
+single_cell_matrix = Giotto:::dt_to_matrix(single_cell_DT)
+
+# Read in the single cell annotation vector
+z.cells1 = readRDS("/data/Giotto_AD_codes/ST_data/zeisel_sc_data/zeisel_meta_no_outliers_gene.rds")
+cell_annotations = as.vector(z.cells1[,"celltypes_main"])
+
+# Create a signature matrix 
+rank_matrix = makeSignMatrixRank(sc_matrix = single_cell_matrix, sc_cluster_ids = cell_annotations)
+
+# Compute cell type enrichment for each spatial spot
+gg1 = runSpatialEnrich(gg1, sign_matrix = rank_matrix, enrich_method = 'rank')  
+
+# Define cell type subset of interest and plot the enrichment scores
+cell_types_subset = colnames(gg1@spatial_enrichment$rank)[c(2:4,6,7)]
+spatCellPlot(gobject = gg1,
+             spat_enr_names = 'rank',cell_annotation_values = cell_types_subset,
+             cow_n_col = 2,coord_fix_ratio = NULL, point_size = 1.25,
+             save_param = list(save_name="7_b_spatcellplot_1_rank"))
+
+## To create individual cell type enrichment plots, add enrichment scores to metadata and plot each cell type
+pDataDT(gg1)
+d.rank = data.frame(gg1@spatial_enrichment$rank)[,cell_types_subset]
+gg1 = addCellMetadata(gg1,new_metadata=d.rank)
+
+for (ct in cell_types_subset){
+  nm = paste0("rank_",ct)
+  spatPlot2D(gobject = gg1, point_alpha = 1, point_size=2.5, show_image=F,
+             cell_color = ct, color_as_factor = F,
+             save_param = list(save_name = nm))
+}
+```
+
+```{r Part D: Identify, cluster and plot spatial genes}
+## Create and plot spatial network
+gg1 <- createSpatialNetwork(gobject = gg1, 
+                            method = 'kNN', k = 8, 
+                            maximum_distance_knn = 3, 
+                            name = 'spatial_network')
+
+showNetworks(gg1)
+
+spatPlot(gobject = gg1, show_network = T, point_size = 2,
+         network_color = 'blue', spatial_network_name = 'spatial_network',
+         save_param = list(save_name = '9_a_knn_network'))
+
+
+## Identify spatial genes using rank binarization, and plot several top scoring genes
+ranktest = binSpect(gg1, bin_method = 'rank', 
+                    calc_hub = T, hub_min_int = 5,
+                    spatial_network_name = 'spatial_network')
+
+spatGenePlot(gg1, expression_values = 'scaled',
+             genes = ranktest$genes[1:6], cow_n_col = 2, point_size = 1.5,
+             save_param = list(save_name = '10_b_spatial_genes_rank'))
+
+
+## Identify sets of spatially co-expressed genes
+ext_spatial_genes = ranktest[1:300,]$gene
+spat_cor_netw_DT = detectSpatialCorGenes(gg1, 
+                                         method = 'network', 
+                                         spatial_network_name = 'spatial_network', 
+                                         subset_genes = ext_spatial_genes)
+
+## Cluster spatially co-expressed genes
+spat_cor_netw_DT = clusterSpatialCorGenes(spat_cor_netw_DT, name = 'spat_netw_clus', k = 10)
+
+## Visualize spatial clusters
+heatmSpatialCorGenes(gg1, 
+                     spatCorObject = spat_cor_netw_DT, 
+                     use_clus_name = 'spat_netw_clus', 
+                     heatmap_legend_param = list(title = NULL, top_annotation = "Coexpr.clust"), 
+                     save_param = list(save_name="10_c_heatmap_v300.10",
+                                       base_height = 12, base_width = 13, units = 'cm'))
+
+## Extract and organize clusters of spatially co-expressed genes
+table(spat_cor_netw_DT$cor_clusters$spat_netw_clus)
+coexpr_dt = data.table::data.table(genes = names(spat_cor_netw_DT$cor_clusters$spat_netw_clus),
+                                   cluster = spat_cor_netw_DT$cor_clusters$spat_netw_clus)
+data.table::setorder(coexpr_dt, cluster)
+
+
+## Read in the list of PIG genes from Chen et al, 2020
+pig = toupper(readLines(paste0(data_path,"/PIGgenes_Chen2020.txt")))
+
+## Compute overlaps between PIG genes and spatial gene clusters
+pig.overlaps = data.frame()
+for (i in min(coexpr_dt[,"cluster"]):max(coexpr_dt[,"cluster"])){
+  pig.overlaps[i,"clust.size"] = coexpr_dt[cluster==i,length(genes)]
+  pig.overlaps[i,"overlap"] = length(intersect(pig,coexpr_dt[cluster==i,][["genes"]]))
+}
+
+pig.overlaps
+
+
+## Add the mean scaled expression of genes from a relevant cluster to metadata, and plot it
+sig6 = coexpr_dt[cluster==6,genes]
+spat.clust.6.mean = apply(gg1@norm_scaled_expr[sig6,],2,mean)
+gg1 = addCellMetadata(gg1,new_metadata=spat.clust.6.mean)
+
+spatPlot2D(gobject = gg1, point_alpha = 0.7, point_size=2.5, show_image=F,
+           cell_color = 'spat.clust.6.mean', color_as_factor = F,
+           save_param = list(save_name = '11_sp.clust.6.mean'))
+
+
+```
