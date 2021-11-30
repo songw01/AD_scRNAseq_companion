@@ -1,0 +1,258 @@
+---
+title: 'ROSMAP snRNA-seq: eQTL Analysis Session'
+author: "Chen Ming"
+date: "Nov 30th, 2021"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 
+This tutorial show how to run eQTL analysis in Cluster1 (Excitatory Neurons) of snRNA-seq of the ROSMAP cohort.  
+R version: R/4.0.2  
+
+Load necessary packages and functions into R  
+
+```{r load functions and packages}
+rm(list = ls())
+library(Seurat)
+library(MatrixEQTL)
+
+outdir <- "eQTL_analysis"
+if(!file.exists(outdir)) dir.create(outdir, recursive = TRUE)
+dir.create("eQTL_analysis/QQPlot")
+dir.create("eQTL_analysis/Cis_eQTLs")
+dir.create("eQTL_analysis/Trans_eQTLs")
+
+```
+
+## data loading
+
+Now, since the data files is huge, load it from cloud.
+A precomputed version of the SeuratObject file is available at https://www.synapse.org/#!Synapse:syn26477245
+Please download the precomputed SeuratObject first.
+
+```{r data loading}
+obj=readRDS("SeuratObject.RDS")
+print(obj)
+```
+
+Here, we extract cells of AD cases
+
+```
+obj_earlyAD=subset(x = obj, subset = pathology.group == "early-pathology")
+obj_lateAD=subset(x = obj, subset = pathology.group == "late-pathology")
+obj_AD=merge(x = obj_earlyAD, y = obj_lateAD)
+data = GetAssayData( obj_AD )
+meta = obj_AD@meta.data
+
+```
+# read clinical meta data
+Next, we need to read the clinical meta file:ROSMAP_clinical.csv.  
+It is stored in https://www.synapse.org/Portal.html#!Synapse:syn3157322 
+The ID key is stored in "ROSMAP_IDkey.txt" file: https://www.synapse.org/#!Synapse:syn3382527  
+Please download the two files before running the codes below: 
+
+```
+clinical = read.csv('ROSMAP_clinical.csv')
+samples01=unique(meta$projid)
+wgs=read.table("ROSMAP_IDkey.txt",header=T,sep="\t")
+overlap=intersect(wgs$projid,samples01)
+wgs02=wgs[match(overlap,wgs$projid),]
+write.table(wgs02,"eQTL_analysis/Samples.Matched.sc.wgs.txt",col.names=T,row.names=F,sep="\t",quote=F)
+write.table(wgs02[,2],"eQTL_analysis/WGSID.Matched.sc.wgs.txt",col.names=F,row.names=F,sep="\t",quote=F)
+projid2=wgs02[,1]
+```
+
+# Calculate Cell count per cluster per individual
+Calculate Cell count per cluster per individual
+
+```
+totalcluster=length(unique(meta$seurat_clusters))
+newmatrix=matrix(data=NA,nrow=totalcluster,ncol=length(projid2))
+colnames(newmatrix)=wgs02[,2]
+rownames(newmatrix)=paste("Cluster",seq(0,21),sep="")
+
+for (index in 0:(totalcluster-1)){
+        mycluster=meta[meta$seurat_clusters==index,]
+        for (i in 1:length(projid2)){
+                cells=mycluster[mycluster$projid==projid2[i],]
+                newmatrix[index+1,i]=dim(cells)[1]
+        }
+}
+
+write.table(newmatrix,"eQTL_analysis/CellCount.Clusters.txt",col.names=T,row.names=T,sep="\t",quote=F)
+
+samples=matrix(data=NA,nrow=2,ncol=dim(newmatrix)[1])
+rownames(samples)=c("Threshold:10","Threshold:5")
+colnames(samples)=paste("Cluster",seq(0,21),sep="")
+for (i in 1:dim(newmatrix)[1]){
+    output=t(newmatrix[i,newmatrix[i,]>=5])
+    mypro=wgs[match(colnames(output),wgs$wgs_id),1]
+    output2=rbind(output,mypro)
+    j=i-1
+    outputfile=paste("eQTL_analysis/Cluster.Sample.CellCount/Cluster",j,".SampleCellCount.txt",sep="")
+    write.table(output2,outputfile,col.names=T,row.names=F,sep="\t",quote=F)
+    wgsidoutput=paste("eQTL_analysis/Cluster.Sample.CellCount/Cluster",j,".WGSID.Used.txt",sep="")
+    write.table(t(t(colnames(output))),wgsidoutput,col.names=F,row.names=F,sep="\t",quote=F)
+}
+
+```
+
+# Avearage the normalized gene expression matrix by per gene, per cell type and per individual
+The normalized gene expression matrix is averaged by per gene, per cell type and per individual
+
+```
+totalcluster=length(unique(meta$seurat_clusters))-1
+for (index in 0:totalcluster){
+        mycluster=meta[meta$seurat_clusters==index,]
+        mydata=data[,match(rownames(mycluster),colnames(data))]
+        individualinput=paste("eQTL_analysis/Cluster.Sample.CellCount/Cluster",index,".SampleCellCount.txt",sep="")
+        usedind=read.table(individualinput,header=T,sep="\t")
+        newmatrix=matrix(data=NA,nrow=17575,ncol=dim(usedind)[2])
+        rownames(newmatrix)=rownames(data)
+        for (i in 1:dim(usedind)[2]){
+                cells=mycluster[mycluster$projid==usedind[2,i],]
+                sample=mydata[,match(rownames(cells),colnames(mydata))]
+                newmatrix[,i]=Matrix::rowMeans(sample)
+        }
+        colnames(newmatrix)=colnames(usedind)
+
+        zerothreshold=0.1*dim(usedind)[2]
+        pass=t(colnames(usedind))
+        colnames(pass)=colnames(usedind)
+        rownames(pass)="id"
+    for (j in 1:dim(newmatrix)[1]){
+           if (length(newmatrix[j,which(newmatrix[j,]==0)]) <zerothreshold){
+                        newrowname=c(rownames(pass),rownames(newmatrix)[j])
+                        pass=rbind(pass,newmatrix[j,])
+                        rownames(pass)=newrowname
+           }
+        }
+        output=paste("eQTL_analysis/Expression_Matrix/Cluster",index,".GeneExpression.txt",sep="")
+        write.table(pass,output,col.names=F,row.names=T,sep="\t",quote=F)
+}
+
+```
+
+#other files for MatrixEQTL
+The genotype matrix file "Cluster1.GenoT_genome.txt" , the snp location file "Cluster1.snps.ROSMAP.location.txt" , covariate file "Covariates.Cluster1.txt" and gene location file "geneloc.txt" are stored in .  
+Please downloaded the above three files before run codes below.  
+Detailed explaination of each file please check the Matrix_eQTL tutorial:http://www.bios.unc.edu/research/genomic_software/Matrix_eQTL/  
+
+# Linear model to use, modelANOVA, modelLINEAR, or modelLINEAR_CROSS
+Use Linear model here
+
+```
+useModel = modelLINEAR
+```
+# Genotype file name
+Read in the genotype matrix and snp location files of Cluster 1.
+
+```
+cluster=1
+SNP_file_name = paste("Cluster",cluster,".GenoT_genome.txt", sep="");
+snps_location_file_name = paste("Cluster",cluster,".snps.ROSMAP.location.txt", sep="");
+```
+
+# Gene expression file name
+Read in the averaged gene expression matrix and gene location of Cluster 1.
+
+```
+expression_file_name = paste("eQTL_analysis", "/Expression_Matrix/Cluster",cluster,".GeneExpression.txt", sep="");
+gene_location_file_name = "geneloc.txt";
+```
+
+# Covariates file name
+# Set to character() for no covariates
+Read in the covariates of Cluster 1.
+
+```
+covariates_file_name = paste("Covariates.Cluster",cluster,".txt", sep="");
+```
+
+
+# Run the eQTL analysis
+Run the eQTL analysis using Matrix_eQTL:
+
+```
+output_file_name_cis = paste(base.dir,"/Cis_eQTLs/Cis.eQTLs.Cluster",cluster,".genome.txt",sep="");
+output_file_name_tra = paste(base.dir,"/Trans_eQTLs/Trans.eQTLs.Cluster",cluster,".genome.txt",sep="");
+
+snpspos = read.table(snps_location_file_name, header = TRUE, stringsAsFactors = FALSE);
+genepos = read.table(gene_location_file_name, header = TRUE, stringsAsFactors = FALSE);
+mygene=read.table(expression_file_name,header=TRUE,stringsAsFactors = FALSE);
+
+pvOutputThreshold_cis = 1;
+pvOutputThreshold_tra = 0.05/(as.numeric(dim(snpspos)[1])*as.numeric(dim(mygene)[1]));
+
+errorCovariance = numeric();
+
+cisDist = 1e6;
+
+snps = SlicedData$new();
+snps$fileDelimiter = "\t";      
+snps$fileOmitCharacters = "-1"; 
+snps$fileSkipRows = 1;          
+snps$fileSkipColumns = 1;      
+snps$fileSliceSize = 2000;     
+snps$LoadFile(SNP_file_name);
+
+gene = SlicedData$new();
+gene$fileDelimiter = "\t";      
+gene$fileOmitCharacters = "NA"; 
+gene$fileSkipRows = 1;          
+gene$fileSkipColumns = 1;       
+gene$fileSliceSize = 2000;      
+gene$LoadFile(expression_file_name);
+
+cvrt = SlicedData$new();
+cvrt$fileDelimiter = "\t";      
+cvrt$fileOmitCharacters = "NA"; 
+cvrt$fileSkipRows = 1;          
+cvrt$fileSkipColumns = 1;      
+if(length(covariates_file_name)>0) {
+cvrt$LoadFile(covariates_file_name);
+}
+
+
+me = Matrix_eQTL_main(
+snps = snps,
+gene = gene,
+cvrt = cvrt,
+output_file_name     = output_file_name_tra,
+pvOutputThreshold     = pvOutputThreshold_tra,
+useModel = useModel,
+errorCovariance = errorCovariance,
+verbose = TRUE,
+output_file_name.cis = output_file_name_cis,
+pvOutputThreshold.cis = pvOutputThreshold_cis,
+snpspos = snpspos,
+genepos = genepos,
+cisDist = cisDist,
+pvalue.hist = "qqplot",
+min.pv.by.genesnp = FALSE,
+noFDRsaveMemory = FALSE);
+```
+
+## Results:
+Output relavant information of output
+
+```
+cat('Analysis done in: ', me$time.in.sec, ' seconds', '\n');
+cat('Detected local eQTLs:', '\n');
+show(me$cis$eqtls)
+cat('Detected distant eQTLs:', '\n');
+show(me$trans$eqtls)
+qqfile=paste(base.dir,"/QQPlot/QQPlot.",cluster,".genome.pdf",sep="")
+pdf(qqfile)
+plot(me)
+dev.off()
+```
+
+#
+The eQTL files are in eQTL_analysis/Cis_eQTLs and eQTL_analysis/Trans_eQTLs
+

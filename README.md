@@ -7,6 +7,7 @@ The filtered count matrix for the ROSMAP study can be downloaded at https://www.
 - Section D-E: [Feature selection, dimension reduction & clustering analysis](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Sections_D_E_FeatureSelection_to_Clustering.html)
 - Section F: [Differential Expression Analysis](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Section_F_DEG_pipeline.html)
 - Section H: [Copy Number Inference](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Sections_H.CNV_Detection.html)
+- Section I: [eQTL detection](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Sections_I_eQTL_Detection.html)
 - Section G: [Trajectory Analysis](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Section_G_Trajectory.html)
 - Section M: [Integration snRNA-seq and bulk RNA-seq datasets](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Section_M_bulk_deconvolution.html)
 - Section O: [Spatial Transcriptome Analysis](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Section_O_Spatial_Transcriptome.html)
