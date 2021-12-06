@@ -1,13 +1,19 @@
 ---
-title: "Section_J_scATACseq_analysis"
-author: "Xianxiao Zhou, Won-Min Song"
-date: "November 30, 2021"
+title: 'Swarup snATAC-seq: QC to Co-accessible analysis'
+author: "Xianxiao Zhou"
+date: "December 3, 2021"
 output: html_document
 ---
 
-```{r setup environment, eval = TRUE, echo = TRUE, results = "hide"}
-out.dir <- "scATACseq_results";dir.create(out.dir)
+## Example pipeline to perform snATAC-seq data analysis using the Swarup data
 
+## Pre-processing workflow
+Download the Swarup snATAC-seq data to a directory, for example "/snRNAseq_Swarup/Data/snATAC-seq/". The data using here is down loaded from https://www.synapse.org/#!Synapse:syn22130833, including a count matrix file from https://www.synapse.org/#!Synapse:syn22130800, a .cvs metadata file from https://www.synapse.org/#!Synapse:syn22130802, a .cvs peak file from https://www.synapse.org/#!Synapse:syn24978763, a .cvs barcode file from https://www.synapse.org/#!Synapse:syn24978672 and a big fragment file from https://www.synapse.org/#!Synapse:syn25745094. 
+This dataset was published in the article: Morabito S, Miyoshi E, Michael N, Shahin S, Head E, and Swarup V, Single-nuclei epigenomic and transcriptomic landscape in Alzheimer's disease , Nature Genetics, 2021 https://doi.org/10.1038/s41588-021-00894-z.
+
+Load necessary libraries and set up input and output locations.
+```{r setup environment, eval = TRUE, echo = TRUE, dev="png", results = "hide"}
+suppressPackageStartupMessages({
 library(Signac)
 library(Seurat)
 library(Rsamtools)
@@ -18,131 +24,105 @@ library(cowplot)
 library(Matrix)
 library(SeuratWrappers)
 library(patchwork)
+library(monocle3)
 library(cicero)
+})
 set.seed(124)
+indir <- 'Data/snATAC-seq/'
+outdir <- "Output/snATAC-seq/"
+if(!file.exists(outdir)) dir.create(outdir, recursive = TRUE)
 ```
-### Pre-processing workflow ###################################
-When pre-processing chromatin data, Signac uses information from two related input files, both of which 
-are created by CellRanger:
-Peak/Cell matrix. This is analogous to the gene expression count matrix used to analyze single-cell RNA-seq. 
-However, instead of genes, each row of the matrix represents a region of the genome (a ‘peak’), that is 
-predicted to represent a region of open chromatin. Each value in the matrix represents the number of Tn5 
-cut sites for each single barcode (i.e. cell) that map within each peak. You can find more detail on the 
-10X Website.
-Fragment file. This represents a full list of all unique fragments across all single cells. It is a 
-substantially larger file, is slower to work with, and is stored on-disk (instead of in memory). However, 
-the advantage of retaining this file is that it contains all fragments associated with each single cell, 
-as opposed to only reads that map to peaks.
 
-For most analyses we work with the peak/cell matrix, but for some (e.g. creating a ‘Gene Activity Matrix’), 
-we find that restricting only to reads in peaks can adversely affect results. We therefore use both files in 
-this vignette. We start by creating a Seurat object using the peak/cell matrix, and store the path to the 
-fragment file on disk in the Seurat object. 
+We use Signac pre-processing chromatin data. Information from two related input files, both of which are created by CellRanger:
+Peak/Cell matrix. This is analogous to the gene expression count matrix used to analyze single-cell RNA-seq. However, instead of genes, each row of the matrix represents a region of the genome (a ‘peak’), that is predicted to represent a region of open chromatin. Each value in the matrix represents the number of Tn5 cut sites for each single barcode (i.e. cell) that map within each peak. You can find more detail on the 10X Website.
+Fragment file. This represents a full list of all unique fragments across all single cells. It is a substantially larger file, is slower to work with, and is stored on-disk (instead of in memory). However, the advantage of retaining this file is that it contains all fragments associated with each single cell, as opposed to only reads that map to peaks.
 
-### Data download
-Download data from https://www.synapse.org/#!Synapse:syn22079621/. For snATAC-seq data, this can be downloaded using synapse interface ( synapse get -r syn22130833).
-
-
-```{r Data pre-processing}
+Let us read in count matrix and sample meta data.
+```{r read count matrix and sample meta, dev="png", eval = TRUE, echo = TRUE}
 snATAC.Counts <- readMM("Data/snATAC-seq/snATAC_counts.mtx")
-metadata <- read.csv("Data/snATAC-seq/snATAC_metadta.csv", header=T,row.names=1)
 peaks <- read.csv("Data/snATAC-seq/peaks.csv", header=F,stringsAsFactors=F)
 barcodes <- read.csv("Data/snATAC-seq/barcodes_atac.csv", header=F,stringsAsFactors=F)
 colnames(snATAC.Counts) <- barcodes[,1]
 rownames(snATAC.Counts) <- peaks[,1]
 snATAC.Counts*1 -> snATAC.Counts
-CTRL.metadata <- metadata[metadata[,1] == "Sample-101", ]
+metadata <- read.csv("Data/snATAC-seq/snATAC_metadta.csv", header=T,row.names=1)
+head(metadata, 4)
+```
+
+To speed up the processing, we use only 1 AD Sample-47 and 1 Control Sample-101 in the analysis. 
+```{r extract counts and metadata for Sample-47 and Sample-101, dev="png", eval = TRUE, echo = TRUE}
 AD.metadata <- metadata[metadata[,1] == "Sample-47", ]
-snATAC.Counts[, rownames(CTRL.metadata)] -> CTRL.Counts
-snATAC.Counts[, rownames(AD.metadata)] -> AD.Counts
+CTRL.metadata <- metadata[metadata[,1] == "Sample-101", ]
+CTRL.Counts <- snATAC.Counts[, rownames(CTRL.metadata)]
+AD.Counts <- snATAC.Counts[, rownames(AD.metadata)]
+```
 
+Next, extract fragments for Sample-47 and Sample-101 and write into separate fragment files "Sample47_fragments.tsv" and "Sample101_fragments.tsv". 
+```{r extract fragments for Sample-47 and Sample-101, dev="png", eval = TRUE, echo = TRUE}
 fragpath <- "Data/snATAC-seq/fragments.tsv.gz"
-CTRL_fragment_file <- "Sample47_fragments.tsv"
+CTRL_fragment_file <- paste(outdir, "Sample47_fragments.tsv", sep="/")
+if (!file.exists(CTRL_fragment_file))
 FilterCells(fragpath, cells = rownames(CTRL.metadata), CTRL_fragment_file)
-AD_fragment_file <- "Sample101_fragments.tsv"
+AD_fragment_file <- paste(outdir, "Sample101_fragments.tsv", sep="/")
+if (!file.exists(AD_fragment_file))
 FilterCells(fragpath, cells = rownames(AD.metadata), AD_fragment_file)
+```
 
-## Obtain annotation
-annotation <- GetGRangesFromEnsDb(ensdb = EnsDb.Hsapiens.v86)
+Obtain annotation
+```{r obtain annotation, dev="png", eval = TRUE, echo = TRUE}
+suppressWarnings(suppressMessages(annotation <- GetGRangesFromEnsDb(ensdb = EnsDb.Hsapiens.v86)))
+```
+
+Change chromosome style
+```{r change chrosome style from number into UCSC style "chr", dev="png", eval = TRUE, echo = TRUE}
 genome(annotation) <- "hg38"
 seqlevelsStyle(annotation) <- "UCSC"
-## Rename chromosomes to change style
+# Rename chromosomes to change them to UCSC style
 ChrList <- paste0("chr", seqlevels(annotation))
 ChrList[25] <- "chrM"
 annotation <- renameSeqlevels(annotation, ChrList)
+```
 
-### Creat scATAC-seq object for control
+Creat scATAC-seq object for control and AD
+```{r creat chromatin assay and Seurat object for AD and Control, dev="png", eval = TRUE, echo = TRUE}
 CTRL <- CreateChromatinAssay(counts = CTRL.Counts, sep = c(":", "-"), min.cells=10, 
 			fragments = CTRL_fragment_file, annotation = annotation)
+GetTSSPositions(Annotation(CTRL))
 CTRL.atac <- CreateSeuratObject(counts = CTRL, assay = "peaks", meta.data = CTRL.metadata, annotation = annotation)
-### Creat scATAC-seq object for AD 
 AD <- CreateChromatinAssay(counts = AD.Counts, sep = c(":", "-"), min.cells=10, 
 			fragments = AD_fragment_file, annotation = annotation)
+GetTSSPositions(Annotation(AD))
 AD.atac <- CreateSeuratObject(counts = AD, assay = "peaks", meta.data = AD.metadata, annotation = annotation)
 ```
 
-### Computing QC Metrics
-We can now compute some QC metrics for the scATAC-seq experiment. We currently suggest the following 
-metrics below to assess data quality. As with scRNA-seq, the expected range of values for these parameters 
-will vary depending on your biological system, cell viability, etc.
-
-Nucleosome banding pattern: The histogram of fragment sizes (determined from the paired-end sequencing 
-reads) should exhibit a strong nucleosome banding pattern. We calculate this per single cell, and quantify 
-the approximate ratio of mononucleosomal to nucleosome-free fragments (stored as nucleosome_signal). Note 
-that by default, this is calculated only on chr1 reads (see the region parameter) to save time.
-
-Transcriptional start site (TSS) enrichment score. The ENCODE project has defined an ATAC-seq targeting 
-score based on the ratio of fragments centered at the TSS to fragments in TSS-flanking regions 
-(see https://www.encodeproject.org/data-standards/terms/). Poor ATAC-seq experiments typically will have 
-a low TSS enrichment score. We can compute this metric for each cell with the TSSEnrichment function, and 
-the results are stored in metadata under the column name TSS.enrichment.
-
-Total number of fragments in peaks: A measure of cellular sequencing depth / complexity. Cells with very 
-few reads may need to be excluded due to low sequencing depth. Cells with extremely high levels may represent 
-doublets or nuclear clumps.
-
-Fraction of fragments in peaks. Represents the fraction of total fragments that fall within ATAC-seq peaks. 
-Cells with low values (i.e. <15-20%) often represent low-quality cells or technical artifacts that should 
-be removed.
-
-Note that the last three metrics can be obtained from the output of CellRanger (which is stored in the 
-object metadata), but can also be calculated for non-10x datasets using Signac (more information at the 
-end of this document).
-
-```{r Get QC Metrics}
+Computing QC metrics for each object
+```{r computing QC metrics, dev="png", eval = TRUE, echo = TRUE}
 CTRL.atac <- TSSEnrichment(CTRL.atac)
 CTRL.atac <- NucleosomeSignal(object = CTRL.atac)
-
 AD.atac <- TSSEnrichment(AD.atac)
 AD.atac <- NucleosomeSignal(object = AD.atac)
+```
 
-pdf(file = paste0(out.dir,"/CTRL.atac.QualityControl_Filtering.pdf"), height = 6,width= 19)
-VlnPlot(
+Visualization of QC metrics
+```{r plot QC metrics, eval = TRUE, echo = TRUE, dev="png",fig.height = 10,fig.width= 8, dpi = 300}
+p1 <- VlnPlot(
   object = CTRL.atac,
   features = c('nCount_peaks','nucleosome_signal', 'TSS.enrichment'),
   pt.size = 0.2,
   ncol = 3) + NoLegend()
-dev.off()
 
-pdf(file = paste0(out.dir,"/AD.atac.QualityControl_Filtering.pdf"), height = 6,width= 19)
-VlnPlot(
+p2 <- VlnPlot(
   object = AD.atac,
   features = c('nCount_peaks','nucleosome_signal', 'TSS.enrichment'),
   pt.size = 0.2,
   ncol = 3) + NoLegend()
-dev.off()
+print(p1 / p2)
 ```
 
-### Tn5 integration events at transcriptional start sites
-The enrichment of Tn5 integration events at transcriptional start sites (TSSs) can also be an important 
-quality control metric to assess the targeting of Tn5 in ATAC-seq experiments. The ENCODE consortium 
-defined a TSS enrichment score as the number of Tn5 integration site around the TSS normalized to the 
-number of Tn5 integration sites in flanking regions. See the ENCODE documentation for more information 
-about the TSS enrichment score (https://www.encodeproject.org/data-standards/terms/). We can calculate 
-the TSS enrichment score for each cell using the TSSEnrichment function in Signac.
+The enrichment of Tn5 integration events at transcriptional start sites (TSSs) can also be an important quality control metric to assess the targeting of Tn5 in ATAC-seq experiments. The ENCODE consortium defined a TSS enrichment score as the number of Tn5 integration site around the TSS normalized to the number of Tn5 integration sites in flanking regions. See the ENCODE documentation for more information about the TSS enrichment score (https://www.encodeproject.org/data-standards/terms/). We can calculate the TSS enrichment score for each cell using the TSSEnrichment function in Signac.
 
-```{r TSS Enrichments}
-# create granges object with TSS positions
+Create granges object with TSS positions
+```{r Create granges object with TSS positions, dev="png", eval = TRUE, echo = TRUE}
 gene.ranges <- genes(EnsDb.Hsapiens.v86)
 gene.ranges <- gene.ranges[gene.ranges$gene_biotype == 'protein_coding', ]
 
@@ -154,14 +134,12 @@ tss.ranges <- GRanges(
 seqlevelsStyle(tss.ranges) <- 'UCSC'
 tss.ranges <- keepStandardChromosomes(tss.ranges, pruning.mode = 'coarse')
 
-# to save time use the first 5000 TSSs
-CTRL.atac <- TSSEnrichment(object = CTRL.atac, tss.positions = tss.ranges[1:5000])
 CTRL.atac$high.tss <- ifelse(CTRL.atac$TSS.enrichment > 1, 'High', 'Low')
-
-AD.atac <- TSSEnrichment(object = AD.atac, tss.positions = tss.ranges[1:5000])
 AD.atac$high.tss <- ifelse(AD.atac$TSS.enrichment > 1, 'High', 'Low')
+``` 
 
-## Finally we remove cells that are outliers for these QC metrics.
+Finally we remove cells that are outliers for these QC metrics.
+```{r remove outlier cells, dev="png", eval = TRUE, echo = TRUE}
 CTRL.atac <- subset(x = CTRL.atac, 
   subset = nCount_peaks < 30000 & nCount_peaks > 1000 &
     nucleosome_signal < 5 & TSS.enrichment > 1)
@@ -169,34 +147,15 @@ CTRL.atac <- subset(x = CTRL.atac,
 AD.atac <- subset(x = AD.atac, 
   subset = nCount_peaks < 30000 & nCount_peaks > 1000 &
     nucleosome_signal < 5 & TSS.enrichment > 1)
+``` 
 
+## Normalization, linear dimensional reduction and integration
+Normalization: Signac performs term frequency-inverse document frequency (TF-IDF) normalization. This is a two-step normalization procedure, that both normalizes across cells to correct for differences in cellular sequencing depth, and across peaks to give higher values to more rare peaks.
 
-```
+Feature selection: The largely binary nature of scATAC-seq data makes it challenging to perform ‘variable’ feature selection, as we do for scRNA-seq. Instead, we can choose to use only the top n% of features (peaks) for dimensional reduction, or remove features present in less that n cells with the FindTopFeatures function. Here, we will use top 90% features, though we note that we see very similar results when using only a small subset of features (try setting min.cutoff to ‘q75’ to use the top 25% all peaks), with faster runtimes. Features used for dimensional reduction are automatically set as VariableFeatures for the Seurat object by this function.
 
-### Normalization and linear dimensional reduction ############################
-# Normalization: 
-Signac performs term frequency-inverse document frequency (TF-IDF) normalization. This is 
-a two-step normalization procedure, that both normalizes across cells to correct for differences in 
-cellular sequencing depth, and across peaks to give higher values to more rare peaks.
-
-# Feature selection: 
-The largely binary nature of scATAC-seq data makes it challenging to perform ‘variable’ 
-feature selection, as we do for scRNA-seq. Instead, we can choose to use only the top n% of features 
-(peaks) for dimensional reduction, or remove features present in less that n cells with the 
-FindTopFeatures function. Here, we will use all features, though we note that we see very similar results 
-when using only a subset of features (try setting min.cutoff to ‘q75’ to use the top 25% all peaks), 
-with faster runtimes. Features used for dimensional reduction are automatically set as VariableFeatures 
-for the Seurat object by this function.
-
-# Dimensional reduction: 
-We next run a singular value decomposition (SVD) on the TD-IDF normalized matrix, 
-using the features (peaks) selected above. This returns a low-dimensional representation of the object 
-(for users who are more familiar with scRNA-seq, you can think of this as analogous to the output of PCA).
-
-```{r Normalization and Dimension Reduction}
-### Latent Semantic Indexing
-
-
+Dimensional reduction: We next run a singular value decomposition (SVD) on the TD-IDF normalized matrix, using the features (peaks) selected above. This returns a low-dimensional representation of the object (for users who are more familiar with scRNA-seq, you can think of this as analogous to the output of PCA).
+```{r normalization and linear dimensional reduction, dev="png", eval = TRUE, echo = TRUE}
 CTRL.atac <- RunTFIDF(CTRL.atac)
 CTRL.atac <- FindTopFeatures(CTRL.atac, min.cutoff = 'q10')
 CTRL.atac <- RunSVD(object = CTRL.atac, assay = 'peaks', reduction.key = 'LSI_', reduction.name = 'lsi')
@@ -207,46 +166,37 @@ AD.atac <- FindTopFeatures(AD.atac, min.cutoff = 'q10')
 AD.atac <- RunSVD(object = AD.atac, assay = 'peaks', reduction.key = 'LSI_', reduction.name = 'lsi')
 AD.atac <- RunUMAP(object = AD.atac, reduction = 'lsi', dims = 2:30)
 
+# Combine AD and control object for integration
 AD_CTRL.combined <- merge(CTRL.atac, AD.atac)
 
+# re-run normalization and linear dimensional reduction for combined data, and then clustering cells. 
 AD_CTRL.combined <- RunTFIDF(AD_CTRL.combined)
 AD_CTRL.combined <- FindTopFeatures(AD_CTRL.combined, min.cutoff = 'q10')
 AD_CTRL.combined <- RunSVD(object = AD_CTRL.combined, assay = 'peaks', reduction.key = 'LSI_', reduction.name = 'lsi')
 AD_CTRL.combined <- RunUMAP(object = AD_CTRL.combined, reduction = 'lsi', dims = 2:30)
 AD_CTRL.combined <- FindNeighbors(AD_CTRL.combined, reduction = "lsi", dims = 2:50)
 AD_CTRL.combined <- FindClusters(AD_CTRL.combined, resolution = 0.5, algorithm = 3)
+``` 
 
-pdf(file = paste0(out.dir,"/Cell_Cluster_UMAP.pdf"), height = 12,width= 15)
-DimPlot(object = AD_CTRL.combined, label = TRUE) + NoLegend()
-dev.off()
-
+Visualization of cell clusters 
+```{r plot DimPlot, eval = TRUE, echo = TRUE, dev="png",fig.width = 10, fig.height = 4, dpi = 300}
 p1 <- DimPlot(AD_CTRL.combined, reduction = "umap", group.by = "Diagnosis", pt.size=0.05, cols = c("deepskyblue","red"))
 p2 <- DimPlot(AD_CTRL.combined, reduction = "umap", label = TRUE)
-pdf(paste0(out.dir,"/scATAC.Cell.Overlay_UMAP_AD_CTRL.pdf"), height = 6, width= 16)
-plot_grid(p1, p2)
-dev.off()
-
-# To visualize the two conditions side-by-side, we can use the split.by argument to show each condition 
-# colored by cluster.
-pdf(file = paste0(out.dir,"/scATAC.Cell.AD_CTRL.Comparison_UMAP.pdf"), height = 6,width= 12)
-DimPlot(AD_CTRL.combined, reduction = "umap", split.by = "Diagnosis", label = TRUE)
-dev.off()
-
-
+print(plot_grid(p1, p2))
 ```
 
-###  Integration AD and Control  ##################
-To find integration anchors between the two datasets, we need to project them into a shared low-dimensional space. 
-To do this, we'll use reciprocal LSI projection (projecting each dataset into the others LSI space) by setting 
-reduction="rlsi". For more information about the data integration methods in Seurat, see our recent paper and the 
-Seurat website.
-Rather than integrating the normalized data matrix, as is typically done for scRNA-seq data, we’ll integrate the 
-low-dimensional cell embeddings (the LSI coordinates) across the datasets using the IntegrateEmbeddings() function. 
-This is much better suited to scATAC-seq data, as we typically have a very sparse matrix with a large number of 
-features. Note that this requires that we first compute an uncorrected LSI embedding using the merged dataset (as 
-we did above).
+To visualize the two conditions side-by-side, we can use the split.by argument to show each condition colored by cluster.
+```{r plot cell clusters by AD and control, dev="png",eval = TRUE, echo = TRUE, fig.width = 8.7, fig.height = 4, dpi = 300}
+p1 <- DimPlot(AD_CTRL.combined, reduction = "umap", split.by = "Diagnosis", label = TRUE)
+print(p1)
+```
 
-```{r Integration}
+## Integration of AD and Control
+To find integration anchors between the two datasets, we need to project them into a shared low-dimensional space. 
+To do this, we’ll use reciprocal LSI projection (projecting each dataset into the others LSI space) by setting reduction="rlsi". For more information about the data integration methods in Seurat, see our recent paper and the Seurat website.
+Rather than integrating the normalized data matrix, as is typically done for scRNA-seq data, we’ll integrate the low-dimensional cell embeddings (the LSI coordinates) across the datasets using the IntegrateEmbeddings() function. 
+This is much better suited to scATAC-seq data, as we typically have a very sparse matrix with a large number of features. Note that this requires that we first compute an uncorrected LSI embedding using the merged dataset (as we did above).
+```{r integration of AD and Control, dev="png", eval = TRUE, echo = TRUE}
 # find integration anchors
 integration.anchors <- FindIntegrationAnchors(object.list = list(CTRL.atac, AD.atac),
   anchor.features = rownames(CTRL.atac), reduction = "rlsi", dims = 2:30)
@@ -255,45 +205,46 @@ integration.anchors <- FindIntegrationAnchors(object.list = list(CTRL.atac, AD.a
 AD_CTRL.integrated <- IntegrateEmbeddings(anchorset = integration.anchors,reductions = AD_CTRL.combined[["lsi"]],
 		new.reduction.name = "integrated_lsi",dims.to.integrate = 1:30)
 
-# create a new UMAP using the integrated embeddings
+# create a new UMAP using the integrated embeddings, re-cluster cells
 AD_CTRL.integrated <- RunUMAP(AD_CTRL.integrated, reduction = "integrated_lsi", dims = 2:30)
 AD_CTRL.integrated <- FindNeighbors(AD_CTRL.integrated, reduction = "integrated_lsi", dims = 2:50)
 AD_CTRL.integrated <- FindClusters(AD_CTRL.integrated, resolution = 0.5, algorithm = 3)
+```
 
-
+Visualization of integrated cell clusters 
+```{r visualize integrated cell clusters , dev="png",eval = TRUE, echo = TRUE, fig.width = 10, fig.height = 4, dpi = 300}
 p1 <- DimPlot(AD_CTRL.integrated, reduction = "umap", group.by = "Diagnosis", pt.size=0.05, cols = c("deepskyblue","red"))
 p2 <- DimPlot(AD_CTRL.integrated, reduction = "umap", label = TRUE)
-pdf("Cell.Overlay_UMAP.integrated.pdf", height = 6, width= 16)
-plot_grid(p1, p2)
-dev.off()
+print(plot_grid(p1, p2))
+```
 
-pdf(file = paste0(out.dir,"/AD_CTRL.Comparison_UMAP_integrated.pdf"), height = 6,width= 12)
-DimPlot(AD_CTRL.integrated, reduction = "umap", split.by = "Diagnosis", label = TRUE)
-dev.off()
+Visualize of integrated cell clusters side-by-side
+```{r Visualize of integrated cell clusters side-by-side, eval = TRUE, echo = TRUE, dev="png",fig.width = 8, fig.height = 4, dpi = 300}
+p1 <- DimPlot(AD_CTRL.integrated, reduction = "umap", split.by = "Diagnosis", label = TRUE)
+print(p1)
+```
 
-# add the gene activity matrix to the Seurat object as a new assay, and normalize it
+Add the gene activity matrix to the Seurat object as a new assay, and normalize it
+```{r add gene activity matrix and normalize it, dev="png", eval = TRUE, echo = TRUE}
 gene.activities <- GeneActivity(AD_CTRL.integrated)
 # add to the Seurat object as a new assay
 AD_CTRL.integrated[['gene.activities']] <- CreateAssayObject(counts = gene.activities)
 AD_CTRL.integrated <- NormalizeData(object = AD_CTRL.integrated, assay = 'gene.activities',
   normalization.method = 'LogNormalize', scale.factor = median(AD_CTRL.integrated$nCount_gene.activities))
-
-## plot gene activities for the cell marker genes
-DefaultAssay(AD_CTRL.integrated) <- 'gene.activities'
-pdf(file = paste0(out.dir,"/Gene.Activity.Cell_Type.Marker.pdf"), height = 30,width= 15)
-FeaturePlot(object = AD_CTRL.integrated,
-  features = c('GFAP', 'AQP4', 'SLC1A2', 'SNAP25', 'SYT1','SLC17A7','SATB2','GAD1','GAD2', 'CSF1R',
-			'CD74','P2RY12','MOBP','MBP','MOG','PDGFRA','CSPG4'),
-  pt.size = 0.2,max.cutoff = 'q95',ncol = 3) # 
-dev.off()
-
 ```
 
-### Identify markers for each cluster ##################
-Identify gene activity markers for each cluster to obtain conserved markers. Cell types can be identified using the conserved 
-markers. 
+Plot gene activities for the cell marker genes
+```{r plot gene activity, eval = TRUE, echo = TRUE, dev="png",fig.width = 10, fig.height = 8, dpi = 300}
+DefaultAssay(AD_CTRL.integrated) <- 'gene.activities'
+p1 <- FeaturePlot(object = AD_CTRL.integrated,
+  features = c('GFAP', 'AQP4', 'SLC1A2', 'SNAP25','SATB2','GAD1','MOBP','MBP','MOG'),
+  pt.size = 0.1,max.cutoff = 'q95',ncol = 3) # 
+print(p1)
+```
 
-```{r Marker identification}
+Identify markers for each cluster
+Identify gene activity markers for each cluster to obtain conserved markers. Cell types can be identified using the conserved markers. 
+```{r identify conserved cell markers for each cluster, dev="png", eval = TRUE, echo = TRUE}
 DefaultAssay(AD_CTRL.integrated) <- 'gene.activities'
 uniq.clusters <- unique(Idents(AD_CTRL.integrated))
 for (i in uniq.clusters) {
@@ -302,50 +253,66 @@ for (i in uniq.clusters) {
 	write.table(data.frame(Gene=rownames(CLS_peaks),CLS_peaks),file=paste("Cluster",i,"AD_CTRL.Conserved.Gene_Activity.txt",sep="."),
 				sep="\t",row.names=F)
 }
+```
 
-### Rename Cell Types
+Rename Cell Types
+```{r rename cell clusters to cell types identified according to cell cluster markers, dev="png", eval = TRUE, echo = TRUE}
 AD_CTRL.integrated <- RenameIdents(AD_CTRL.integrated, `0` = "Oligodendrocyte 1", `1` = "Excitatory neuron 1", 
-    `2` = "Oligodendrocyte 2",`3` = "Astrocyte 1", `4` = "Microglia", `5` = "Astrocyte 2", 
-	`6` = "Excitatory neuron 2", `7` = "Inhibitory neuron 1", `8` = "Inhibitory neuron 2", `9` = "Pericyte", 
+    `2` = "Astrocyte 1",`3` = "Microglia", `4` = "Excitatory neuron 2", `5` = "Inhibitory neuron 1", 
+	`6` = "Astrocyte 2", `7` = "Inhibitory neuron 2", `8` = "Pericyte", `9` = "Oligodendrocyte 2", 
     `10` = "Excitatory neuron 3")
-
-### Visualization with Cell type annotation, with or without labels
-pdf(file = paste0(out.dir,"/AD_CTRL.integrated.Cluster.Annotation.pdf"), height = 4,width= 6)
-DimPlot(AD_CTRL.integrated, label = TRUE)
-DimPlot(AD_CTRL.integrated, label = FALSE)
-dev.off()
-## assign cell type for each cell
+# assign cell type for each cell
 AD_CTRL.integrated$CellType <- Idents(AD_CTRL.integrated)
 AD_CTRL.integrated$celltype.Diag <- paste(Idents(AD_CTRL.integrated), AD_CTRL.integrated$Diagnosis, sep = "_")
 ```
 
-### Find differentially accessible peaks ###################
-To find differentially accessible regions between clusters of cells, we can perform a differential 
-accessibility (DA) test. We utilize logistic regression for DA, as suggested by Ntranos et al. 2018 for 
-scRNA-seq data, and add the total number of fragments as a latent variable to mitigate the effect of 
-differential sequencing depth on the result. We can  visualize these chromatin ‘markers’ on a violin plot, 
-feature plot, dot plot, heat map, or any visualization tool in Seurat. 
+Visualization with Cell type annotation
+```{r plot cell type, eval = TRUE, echo = TRUE, dev="png",fig.width = 10, fig.height = 8, dpi = 300}
+p1 <- DimPlot(AD_CTRL.integrated, label = FALSE)
+print(p1)
+```
 
-```{r Differentiall Accessible Peaks}
-# switch back to working with peaks instead of gene activities
-Idents(AD_CTRL.integrated) <- AD_CTRL.integrated$celltype.Diag
-ADvsCTRL.Ex1.peaks <- FindMarkers(AD_CTRL.integrated, ident.1 = "Excitatory neuron 1_AD", ident.2 = "Excitatory neuron 1_Control", 
-		assay = "peaks",slot = "data",logfc.threshold = 0.01, test.use = "LR",min.pct = 0.1,
-		min.cells.feature = 1,min.cells.group = 1,verbose = FALSE)
+Create the Cicero object to construct co-accessible network
+We can find cis-co-accessible networks (CCANs) using Cicero. The Cicero developers have developed a separate branch of the package that works with a Monocle 3 CellDataSet object. We will first make sure this branch is installed, then convert our Seurat object to CellDataSet format.
+```{r make Cicero cds, dev="png", eval = TRUE, echo = TRUE}
+DefaultAssay(AD_CTRL.integrated) <- 'peaks'
+AD_CTRL.cds <- as.cell_data_set(x = AD_CTRL.integrated)
+# AD_CTRL.cds <- cluster_cells(AD_CTRL.cds, resolution=1e-5)
+# remove objects to release memory
+rm(AD_CTRL.combined,snATAC.Counts,AD.Counts,AD.atac,AD,CTRL,integration.anchors,gene.activities,CTRL.atac,CTRL.Counts,peaks)
+AD_CTRL.cicero <- make_cicero_cds(AD_CTRL.cds, reduced_coordinates = reducedDims(AD_CTRL.cds)$UMAP)
+```
 
-DefaultAssay(AD_CTRL.integrated) = "peaks"
-closestGenes <- ClosestFeature(AD_CTRL.integrated,regions = rownames(ADvsCTRL.Ex1.peaks),sep = c(':', '-'))
+We’ll demonstrate running Cicero here using just one chromosome to save some time, but the same workflow can be applied to find CCANs for the whole genome.
+Here we demonstrate the most basic workflow for running Cicero. This workflow can be broken down into several 
+steps, each with parameters that can be changed from their defaults to fine-tune the Cicero algorithm depending on your data. 
+```{r genome and chromosomes, dev="png", eval = TRUE, echo = TRUE}
+# get the chromosome sizes from the Seurat object
+genome <- seqlengths(annotation)
+# convert chromosome sizes to a dataframe
+genome <- genome[2]
+genome.df <- data.frame(names(genome), "length" = genome)
+```
 
-write.table(data.frame(closestGenes, ADvsCTRL.Ex1.peaks),
-		file=paste0(out.dir,"/Excitatory neuron 1.ADvsCTRL_peaks.txt"),sep="\t",row.names=F,quote=F)
+```{r run cicero, dev="png", eval = TRUE, echo = TRUE}
+# run cicero and find cis-co-accessible networks (CCANs)
+conns <- run_cicero(AD_CTRL.cicero, genomic_coords = genome.df, sample_num = 3)
+ccans <- generate_ccans(conns)
+```
 
-p1 <- VlnPlot(object = AD_CTRL.integrated, features = rownames(ADvsCTRL.Ex1.peaks)[1],
-  ncol = 1, pt.size = 0.1)
-  
-p2 <- FeaturePlot(object = AD_CTRL.integrated, features = rownames(ADvsCTRL.Ex1.peaks)[1],
-  ncol = 1, pt.size = 0.1)
-pdf(file = paste0(out.dir,"/ADvsCTRL.Top.Peak.pdf"), height = 8,width= 16)
-plot_grid(p1, p2)
-dev.off()
+Add links to the integrated Seurat object
+We can add the co-accessible links found by Cicero to the ChromatinAssay object in Seurat. Using the ConnectionsToLinks() function in Signac we can convert the outputs of Cicero to the format needed to store in the links slot in the ChromatinAssay, and add this to the object using the Links<- assignment function.
+```{r add links, dev="png", eval = TRUE, echo = TRUE}
+links <- ConnectionsToLinks(conns = conns, ccans = ccans)
+Links(AD_CTRL.integrated) <- links
+```
+## Visualization gene SNAP25
+```{r plot coverage for SNAP25, eval = TRUE, echo = TRUE, dev="png",fig.width = 6, fig.height = 4, dpi = 300}
+p1 <- CoveragePlot(AD_CTRL.integrated, region = "chr20-10198829-10327420")
+print(p1)
+```
 
+## Session info
+```{r session info, dev="png", eval = TRUE, echo = TRUE}
+sessionInfo()
 ```
