@@ -9,7 +9,7 @@ The filtered count matrix for the ROSMAP study can be downloaded at https://www.
 - Section H: [Copy Number Inference](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Sections_H.CNV_Detection.html)
 - Section I: [eQTL detection](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Sections_I_eQTL_Detection.html)
 - Section J: [scATAC-seq Analysis](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Section_J_scATACseq.html)
-- Section K: Gene Network Analysis ([coexpression](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Section_K_Gene_Network_Analysis.html), [BN](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Section_K_Bayesian_Network_Analysis.html))
+- Section K: Gene Network Analysis ([MEGENA](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Section_K_Gene_Network_Analysis.html), [BN](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Section_K_Bayesian_Network_Analysis.html))
 - Section G: [Trajectory Analysis](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Section_G_Trajectory.html)
 - Section M: [Integration snRNA-seq and bulk RNA-seq datasets](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Section_M_bulk_deconvolution.html)
 - Section O: [Spatial Transcriptome Analysis](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Section_O_Spatial_Transcriptome.html)
