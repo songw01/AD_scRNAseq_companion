@@ -1,0 +1,57 @@
+---
+title: 'ROSMAP snRNA-seq: Bayesian network analysis'
+author: "Minghui Wang"
+date: "November 29, 2021"
+output: html_document
+---
+
+
+#### Step 1. Prepare data for Bayesian network analysis using RIMBANet
+```{r setup environment, eval = TRUE, echo = TRUE, results = "hide"}
+rm(list = ls())
+library(Seurat)
+library(Matrix)
+```
+
+Read in Seurat Object file.
+```{r read Seurat object, eval = TRUE, echo = TRUE}
+obj = readRDS("Output/SeuratObject.RDS")
+```
+
+First, extract the cluster-specific expression data. As an example, we will use data from cells in cluster 5.
+```{r get data, eval = TRUE, echo = TRUE}
+clusterid = 5
+#extract data and filter lowly expressed genes
+expr_dat = GetAssayData(obj[, Idents(obj) == clusterid], slot = 'data')
+expr_dat = expr_dat[rowSums(expr_dat > 0) >= 0.2 * ncol(expr_dat), ]
+expr_dat = expr_dat[apply(expr_dat, 1, function(x) length(unique(x))) > 3, ]
+```
+
+Prepare output directory.
+```{r prepare output, eval = TRUE, echo = TRUE}
+outdir = paste0('BN/Cluster_', clusterid, '/')
+if(!file.exists(outdir)) dir.create(outdir, recursive = TRUE)
+setwd(outdir)
+```
+
+Define a discretization function. Here we will use k-means clustering (k = 3) to discretize the expression data.
+```{r k-means discretization, eval = TRUE, echo = TRUE}
+discretizeK = function(x, k = 3){
+	y = kmeans(x, k)
+	order(y$centers)[y$cluster] - 1
+}
+expr_dat_3 <- t(apply(expr_dat, 1, discretizeK))
+```
+
+Write discretized data into file `data.discretized.txt`.
+```{r save data, eval = TRUE, echo = TRUE}
+write.table(expr_dat_3, file = paste0(outdir, 'data.discretized.txt'), col.names = FALSE, row.names = TRUE, quote = FALSE, sep = "\t")
+```
+
+#### Step 2. Construct BN by using RIMBANet
+Now run the RIMBANet analysis with `data.discretized.txt` by following a pipeline at https://github.com/mw201608/BayesianNetwork
+
+## Session info
+```{r session info}
+sessionInfo()
+```
