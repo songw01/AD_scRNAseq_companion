@@ -1,0 +1,292 @@
+---
+title: 'scPower optimizes the design of scRNA-Seq experiments'
+author: "Xianxiao Zhou"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+scPower is an R package for power analysis and design of single cell transcriptomics experiments for differential expression (DE) and eQTL analysis. A detection of cell-type specific DE and eQTL genes is possible with the help of single cell RNA-seq. It enables the user to calculate the power for a given experimental setup and to choose for a restricted budget the optimal combination of experimental parameters which maximizes the power. 
+Here, we show the power analysis for a DE study, for an eQTL study it works in similar way. 
+
+Load necessary libraries and set up input and output locations.
+```{r setup environment, eval = TRUE, echo = TRUE}
+suppressPackageStartupMessages({
+library(scPower)
+library(reshape2)
+library(ggplot2)
+})
+set.seed(124)
+```
+
+
+## Generation of new priors from the ROSMAP data set
+
+Two types of priors are necessary for scPower simulations:
+
+1) the cell type specific expression distribution of all genes for the expression probability curves, which can be fitted from single cell RNA-seq data of the same technology (e.g. data from a pilot study). The distribution include the read-UMI fit to estimate the UMI counts per cell, the gamma mixed fits for the mean values of each gene and the mean-dispersion fits for the dispersion values of each gene.
+
+2) effect sizes and expression ranks of the DE genes, which can be taken from any kind of study or simulated. We use log2 fold changes from inhibitory neurons here. 
+
+They can be generated from existing data set. Here, we use 4 samples from the ROSMAP dataset (https://pubmed.ncbi.nlm.nih.gov/31042697/). 
+
+### Load count matrix of 4 samples (2 ADs and 2 CTRLs) from the ROAMAP dataset.
+```{r}
+#SampleNames <- unique(ROSMAP$individualID)
+
+#R8744945.counts <- ROSMAP@assays$RNA@counts[,ROSMAP$individualID == "R8744945"]
+#R9426782.counts <- ROSMAP@assays$RNA@counts[,ROSMAP$individualID == "R9426782"]
+#R9307768.counts <- ROSMAP@assays$RNA@counts[,ROSMAP$individualID == "R9307768"]
+#R8608442.counts <- ROSMAP@assays$RNA@counts[,ROSMAP$individualID == "R8608442"]
+
+#list(R8744945.counts,R9426782.counts,R9307768.counts,R8608442.counts) -> countMatrix
+#names(countMatrix) <- SampleNames[1:4]
+#save(countMatrix, file="CountMatrix1to4.RData")
+
+load("CountMatrix1to4.RData")
+#Dimensions of the three count matrices
+sapply(countMatrix,dim)
+
+```
+
+### Counting observed expressed genes 
+
+The number of expressed genes in the data set can be estimated by reformating the 2d count matrix into a 3d pseudobulk matrix, using the function "create.pseudobulk". Therefore, an annotation data frame is required with individual and cell type annotations for each cells. The rows of the annotaiton data frame must match the columns in the count matrix (same ordering of cells). After the pseudobulk matrix is created, the expressed genes are extracted using the function "calculate.gene.counts". 
+
+```{r}
+expressed.genes.df <- NULL
+for(name in names(countMatrix)){
+	count.matrix <- countMatrix[[name]]
+	annot.df <- data.frame(individual=paste0("S",rep(1:5,length.out=ncol(count.matrix))),
+                       cell.type=rep("Mic",ncol(count.matrix)))
+	#Reformat count matrix into pseudobulk matrix
+	pseudo.bulk <- create.pseudobulk(count.matrix, annot.df)
+	#Calculate expressed genes in the pseudobulk matrix
+	expressed.genes <- calculate.gene.counts(pseudo.bulk, min.counts=3, perc.indiv = 0.5)
+	#Get the number of expressed genes
+	num.expressed.genes <- nrow(expressed.genes)
+  
+	#Save expressed genes
+	expressed.genes.df <- rbind(expressed.genes.df, data.frame(matrix=name,
+                num.cells=ncol(count.matrix), expressed.genes=num.expressed.genes))
+}
+
+print(expressed.genes.df)
+
+```
+
+
+### Estimation of negative binomial paramters for each gene
+
+As a first step for fitting the expression distribution, the negative binomial fit for each gene, i.e. the mean and disperion parameter, is estimated with "nbinom.estimation". The function uses DESeq for library normalization and parameter estimation. The "poscounts" normalization is used here as the snRNA-Seq data is very sparse.  
+
+The function returns a list with three elements: the normalized mean values, the dispersion values and the parameters of the mean-dispersion function fitted from DESeq. 
+
+```{r}
+norm.mean.values<-NULL
+disp.param<-NULL
+for(name in names(countMatrix)){
+	temp <- nbinom.estimation(as.matrix(countMatrix[[name]]), "poscounts")
+  
+	#Save the normalized mean values
+	norm.mean.values.temp <- temp[[1]]
+	norm.mean.values.temp$matrix <- name
+	norm.mean.values <- rbind(norm.mean.values,norm.mean.values.temp)
+  
+	#Save the parameter of the mean-dispersion function
+	disp.param.temp <- temp[[3]]
+	disp.param.temp$matrix <- name
+	disp.param <- rbind(disp.param,disp.param.temp)
+}
+
+head(norm.mean.values)
+print(disp.param)
+
+```
+
+### Estimation of a gamma mixed distribution over all means
+
+A mixed distribution of a zero component and two left censored gamma components is fitted for each mean value vector. As a fraction of the zero values can be expressed genes below the detection threshold of the experiment, the gamma distributions are modelled as left censored. Here, we use 1/num_cells_celltype as the censoring point.
+
+```{r}
+gamma.fits <- NULL
+for(name in names(countMatrix)){
+  
+  #Number of cells per cell type as censoring point
+  censoredPoint <- 1 / ncol(countMatrix[[name]])
+  
+  norm.mean.values.temp <- norm.mean.values[norm.mean.values$matrix == name,]
+  gamma.fit.temp <- mixed.gamma.estimation(norm.mean.values.temp$mean, num.genes.kept = 17775, censoredPoint = censoredPoint)
+  gamma.fit.temp$matrix <- name
+  gamma.fits <- rbind(gamma.fits,gamma.fit.temp)
+}
+
+print(gamma.fits)
+```
+
+### Parameterization of the parameters of the gamma fits by the mean UMI counts per cell
+
+The gamma fits over all matrices are parameterized by the mean UMI counts per cell. 
+
+```{r,fig.width=4}
+#Estimate the mean umi values per cell for each matrix
+umi.values <- NULL
+for(name in names(countMatrix)){
+  mean.umi <- meanUMI.calculation(as.matrix(countMatrix[[name]]))
+  umi.values <- rbind(umi.values,data.frame(mean.umi,matrix=name))
+}
+
+print(umi.values)
+
+gamma.fits <- merge(gamma.fits,umi.values,by="matrix")
+
+#Convert the gamma fits from the shape-rate parametrization to the mean-sd parametrization
+gamma.fits <- convert.gamma.parameters(gamma.fits)
+
+#Visualize the linear relationship between gamma parameters and UMI values in plots
+plot.values <- melt(gamma.fits,id.vars=c("matrix","mean.umi"))
+plot.values <- plot.values[plot.values$variable %in% c("mean1","mean2","sd1","sd2","p1","p2"),]
+
+ggplot(plot.values,aes(x=mean.umi,y=value)) + geom_point()+geom_line() + facet_wrap(~variable,ncol=2,scales="free")
+
+#Fit relationship between gamma parameters and UMI values
+gamma.linear.fit.new <- umi.gamma.relation(gamma.fits)
+print(gamma.linear.fit.new)
+
+```
+
+### Estimation of median dispersion function for each cell type
+
+For the dispersion parameter, no relation with the UMI counts was found. Therefore, simply the median value over all subsampling runs is taken for each parameter of the mean-dispersion function.
+
+```{r}
+disp.fun.general.new <- dispersion.function.estimation(disp.param)
+print(disp.fun.general.new)
+```
+
+### Fitting a functions for UMI counts dependent on read depth
+
+As a last point, the relationship between reads and UMIs is fitted logarithmically. Therefore, the number of mapped reads is necessary, which can be gained from summary statistics after the mapping (e.g. in the cellranger summary statistics).
+
+```{r,fig.width=3, fig.height=3}
+# Annotation of cell type for all fitted data frames
+gamma.linear.fit.new$ct <- "New_ct"
+disp.fun.general.new$ct <- "New_ct"
+
+#Number of mapped reads taken from cellranger summary statistics
+mapped.reads <- data.frame(matrix = names(countMatrix), transcriptome.mapped.reads=c(21186,15690,12563,11324))
+
+#Plot relationship between mean reads per cell and mean UMI per cell
+read.umis <- merge(umi.values,mapped.reads,by="matrix")
+print(read.umis)
+
+ggplot(read.umis,aes(x=transcriptome.mapped.reads,y=mean.umi))+ geom_point()+geom_line()
+
+#Fit relationship between mean reads per cell and mean UMI per cell
+read.umi.fit.new <- umi.read.relation(read.umis)
+print(read.umi.fit.new)
+```
+
+### Validation of expression probability model
+
+In the section "Counting observed expressed genes", the number of expressed genes in our example count matrices were calculated and saved in the data frame "expressed.genes.df". To validate our model, we try to predict the same number of expressed genes using our fitted model.
+
+```{r,fig.width=5, fig.height=3}
+#Merge the observed numbers of expressed genes with the read depth
+expressed.genes.df <- merge(expressed.genes.df, mapped.reads, by="matrix")
+
+#Get the number of cells per cell type and individual
+expressed.genes.df$cells.indiv <- expressed.genes.df$num.cells/5
+expressed.genes.df$estimated.genes <- NA
+for(i in 1:nrow(expressed.genes.df)){
+  
+  #Vector with the expression probability for each gene
+  expr.prob <- estimate.exp.prob.param(nSamples=5, readDepth=expressed.genes.df$transcriptome.mapped.reads[i],
+                                    nCellsCt=expressed.genes.df$cells.indiv[i],
+                                    read.umi.fit = read.umi.fit.new,
+                                    gamma.mixed.fits = gamma.linear.fit.new,
+                                    ct = "New_ct",
+                                    disp.fun.param = disp.fun.general.new,
+                                    min.counts = 3,
+                                    perc.indiv = 0.5)
+  
+  #Expected number of expressed genes
+  expressed.genes.df$estimated.genes[i] <- round(sum(expr.prob))
+  
+}
+print(expressed.genes.df)
+
+plot.expressed.genes.df<-reshape2::melt(expressed.genes.df, id.vars=c("matrix","num.cells","cells.indiv","transcriptome.mapped.reads"))
+
+ggplot(plot.expressed.genes.df,aes(x=transcriptome.mapped.reads,y=value,
+        color=variable)) + geom_point()+geom_line()
+
+```
+
+## Use of expression probability model for power calculation
+
+The fitted values can adapt the power calculation to the specific conditions of the experiment, e.g. a specific cell type of interest. 
+
+```{r}
+
+power<-power.general.restrictedDoublets(nSamples=20,nCells=5000,readDepth=25000,
+                                        ct.freq=0.2,type="de",
+                                        ref.study=scPower::de.ref.study,
+                                        ref.study.name="Nicodemus-Johnson_AEC",
+                                        cellsPerLane=20000,
+                                        read.umi.fit = read.umi.fit.new,
+                                        gamma.mixed.fits = gamma.linear.fit.new,
+                                        ct="New_ct",
+                                        disp.fun.param=disp.fun.general.new,
+                                        mappingEfficiency = 0.8,
+                                        min.UMI.counts = 3,
+                                        perc.indiv.expr = 0.5,
+                                        sign.threshold = 0.05,
+                                        MTmethod="FDR")
+
+print(power)
+
+```
+
+## Selection of optimal parameter combination for a restricted budget
+
+scPower gives the user the opportunity to select the best parameter combination for a restricted budget. In the following example, we optimize the experimental design for a budget of 30,000. For two of the three parameters, sample size, cells per individual and read depth, vectors with potential values are required, the third variable is determined uniquely given the other two and the overall budget. Which of the variables is left out, can be freely chosen. In this example we set the number of cells per individual and read depths in the parameters readDepthRange and cellPersRange, and leave out the sample size, which will be determined by the algorithm. 
+
+In this example, we set useSimulatedPower as FALSE to speed up the calculation. It should be set as TRUE to increase accuracy. 
+
+```{r}
+
+opt.design <- optimize.constant.budget(totalBudget = 30000,type = "de",
+                                     ct="New_ct",ct.freq=0.2,
+                                     costKit = 5000,
+                                     costFlowCell = 13000,
+                                     readsPerFlowcell = 4100*10^6,
+                                     ref.study = scPower::de.ref.study,
+                                     ref.study.name = "Nicodemus-Johnson_AEC",
+                                     samplesPerLane = 4,
+                                     read.umi.fit = read.umi.fit.new,
+                                     gamma.mixed.fits = gamma.linear.fit.new,
+                                     disp.fun.param = disp.fun.general.new,
+                                     nSamplesRange=NULL,
+                                     nCellsRange = seq(1000,10000,by=1000),
+                                     readDepthRange = seq(20000,70000,by=5000),
+                                     mappingEfficiency = 0.8,
+                                     sign.threshold = 0.05,
+                                     MTmethod="FDR",
+                                     useSimulatedPower = FALSE,
+                                     speedPowerCalc = FALSE)
+
+
+head(opt.design)
+#Optimal experimental design combination
+print(opt.design[which.max(opt.design$powerDetect),])
+```
+
+## Session info
+```{r session info}
+sessionInfo()
+```
+
+
+
+
+
