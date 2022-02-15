@@ -3,7 +3,8 @@
 This Github page contains R codes used to analyze ROSMAP data from Mathys et al. 2019, and demonstrate applicability of various computational tools for AD scRNA-seq analysis.
 The filtered count matrix for the ROSMAP study can be downloaded at https://www.synapse.org/#!Synapse:syn18681734. See Section B. [Quality Control to Clustering](https://songw01.github.io/AD_scRNAseq_companion/vignettes/00_qc_normalization_cluster.html) for details on the data download. 
 
-- Section A: [Overview of Single Cell Sequencing Study Design (Power Analysis)](https://songw01.github.io/AD_scRNAseq_companion/vignettes/scPower.ROSMAP.html)
+- Section A: [Overview of Single Cell Sequencing Study Design (Power Analysis)](https://songw01.github.io/AD_scRNAseq_companion/vignettes/scPower.ROSMAP.html): Also, see for [detailed discussions in single-cell RNA-seq power analysis for experimental design](https://songw01.github.io/AD_scRNAseq_companion/vignettes/PowerAnalysis_Final.pdf).
+https://songw01.github.io/AD_scRNAseq_companion/vignettes/PowerAnalysis_Final.pdf 
 - Section B: [Quality Control to Clustering](https://songw01.github.io/AD_scRNAseq_companion/vignettes/00_qc_normalization_cluster.html)
 - Section D-E: [Feature selection, dimension reduction & clustering analysis](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Sections_D_E_FeatureSelection_to_Clustering.html)
 - Section F: [Differential Expression Analysis](https://songw01.github.io/AD_scRNAseq_companion/vignettes/Section_F_DEG_pipeline.html)
