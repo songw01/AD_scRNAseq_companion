@@ -1,4 +1,7 @@
-**AD scRNA-seq review paper companion codes**
+**Companion software code for the review article by Wang M. et al.** 
+(Guidelines for Bioinformatics of Single-Cell Sequencing Data Analysis in Alzheimer’s Disease: Review, Recommendation, Implementation and Application. (2022) Molecular Neurodegeneration.)
+
+*Correspondence: Prof. Bin Zhang (bin.zhang@mssm.edu or binzhang.ucla@gmail.com)*
 
 This Github page contains R codes used to analyze ROSMAP data from Mathys et al. 2019, and demonstrate applicability of various computational tools for AD scRNA-seq analysis.
 The filtered count matrix for the ROSMAP study can be downloaded at https://www.synapse.org/#!Synapse:syn18681734. See Section B. [Quality Control to Clustering](https://songw01.github.io/AD_scRNAseq_companion/vignettes/00_qc_normalization_cluster.html) for details on the data download. 
